@@ -63,6 +63,7 @@ use crate::link::relay_summary::RelaySummary;
 use crate::link::LinkParameters;
 use crate::link::{pending, relay_sender};
 use crate::path::PathIdentifiers;
+use crate::relay_events::{record_relay_event, RelayEvent};
 use crate::telemetry;
 use crate::util::collate::CollatedIterExt;
 use crate::util::pretty::PrettyEvents;
@@ -726,6 +727,51 @@ impl<ChainA: ChainHandle, ChainB: ChainHandle> RelayPath<ChainA, ChainB> {
                             &counterparty,
                         );
                     });
+
+                    // Record relay events for history tracking
+                    {
+                        let (dst_chain, src_chain, _channel_id, _port_id) =
+                            self.target_info(odata.target);
+
+                        for transit_msg in &odata.batch {
+                            match &transit_msg.event_with_height.event {
+                                IbcEvent::SendPacket(e) => {
+                                    let event = RelayEvent::new(
+                                        src_chain.to_string(),
+                                        dst_chain.to_string(),
+                                        e.src_channel_id().to_string(),
+                                        e.dst_channel_id().to_string(),
+                                        e.packet.sequence.into(),
+                                        "recv",
+                                    );
+                                    record_relay_event(event);
+                                }
+                                IbcEvent::WriteAcknowledgement(e) => {
+                                    let event = RelayEvent::new(
+                                        src_chain.to_string(),
+                                        dst_chain.to_string(),
+                                        e.src_channel_id().to_string(),
+                                        e.dst_channel_id().to_string(),
+                                        e.packet.sequence.into(),
+                                        "ack",
+                                    );
+                                    record_relay_event(event);
+                                }
+                                IbcEvent::TimeoutPacket(e) => {
+                                    let event = RelayEvent::new(
+                                        src_chain.to_string(),
+                                        dst_chain.to_string(),
+                                        e.src_channel_id().to_string(),
+                                        e.dst_channel_id().to_string(),
+                                        e.packet.sequence.into(),
+                                        "timeout",
+                                    );
+                                    record_relay_event(event);
+                                }
+                                _ => {}
+                            };
+                        }
+                    }
 
                     return Ok(reply);
                 }

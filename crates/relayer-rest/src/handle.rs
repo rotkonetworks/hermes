@@ -4,6 +4,7 @@ use tracing::error;
 
 use crossbeam_channel as channel;
 
+use ibc_relayer::relay_events::{RelayEvent, RelayStats};
 use ibc_relayer::supervisor::dump_state::SupervisorState;
 use ibc_relayer::{
     config::ChainConfig,
@@ -74,6 +75,24 @@ pub fn trigger_clear_packets(
         chain_id,
         reply_to,
     })
+}
+
+/// Get relay history with optional chain filter
+pub fn get_history(
+    sender: &channel::Sender<Request>,
+    limit: usize,
+    chain_filter: Option<String>,
+) -> Result<Vec<RelayEvent>, RestApiError> {
+    submit_request(sender, |reply_to| Request::GetHistory {
+        limit,
+        chain_filter,
+        reply_to,
+    })
+}
+
+/// Get relay statistics
+pub fn get_stats(sender: &channel::Sender<Request>) -> Result<RelayStats, RestApiError> {
+    submit_request(sender, |reply_to| Request::GetStats { reply_to })
 }
 
 pub fn assemble_version_info(sender: &channel::Sender<Request>) -> Vec<VersionInfo> {

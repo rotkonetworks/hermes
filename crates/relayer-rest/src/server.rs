@@ -17,7 +17,8 @@ use tokio::task::JoinHandle;
 use ibc_relayer::rest::{request::Request, RestApiError};
 
 use crate::handle::{
-    all_chain_ids, assemble_version_info, chain_config, supervisor_state, trigger_clear_packets,
+    all_chain_ids, assemble_version_info, chain_config, get_history, get_stats, supervisor_state,
+    trigger_clear_packets,
 };
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
@@ -84,6 +85,30 @@ async fn clear_packets(
     Json(JsonResult::from(result))
 }
 
+#[derive(Debug, Deserialize)]
+struct HistoryParams {
+    #[serde(default = "default_limit")]
+    limit: usize,
+    chain: Option<String>,
+}
+
+fn default_limit() -> usize {
+    100
+}
+
+async fn history(
+    Extension(sender): Extension<Sender>,
+    Query(params): Query<HistoryParams>,
+) -> impl IntoResponse {
+    let result = get_history(&sender, params.limit, params.chain);
+    Json(JsonResult::from(result))
+}
+
+async fn stats(Extension(sender): Extension<Sender>) -> impl IntoResponse {
+    let result = get_stats(&sender);
+    Json(JsonResult::from(result))
+}
+
 type Sender = channel::Sender<Request>;
 
 async fn run(addr: SocketAddr, sender: Sender) {
@@ -93,6 +118,8 @@ async fn run(addr: SocketAddr, sender: Sender) {
         .route("/chain/:id", get(get_chain))
         .route("/state", get(get_state))
         .route("/clear_packets", post(clear_packets))
+        .route("/history", get(history))
+        .route("/stats", get(stats))
         .layer(Extension(sender));
 
     Server::bind(&addr)

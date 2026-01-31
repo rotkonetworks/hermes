@@ -4,6 +4,7 @@ use tracing::{error, trace};
 
 use crate::{
     config::Config,
+    relay_events::{get_relay_history, get_relay_stats},
     rest::request::ReplySender,
     rest::request::{Request, VersionInfo},
     supervisor::dump_state::SupervisorState,
@@ -89,6 +90,28 @@ pub fn process_incoming_requests(config: &Config, channel: &Receiver) -> Option<
                 trace!("ClearPackets");
 
                 return Some(Command::ClearPackets(chain_id, reply_to));
+            }
+
+            Request::GetHistory {
+                limit,
+                chain_filter,
+                reply_to,
+            } => {
+                trace!("GetHistory limit={} chain={:?}", limit, chain_filter);
+
+                let history = get_relay_history(limit, chain_filter.as_deref());
+                reply_to
+                    .send(Ok(history))
+                    .unwrap_or_else(|e| error!("error replying to a REST request {}", e));
+            }
+
+            Request::GetStats { reply_to } => {
+                trace!("GetStats");
+
+                let stats = get_relay_stats();
+                reply_to
+                    .send(Ok(stats))
+                    .unwrap_or_else(|e| error!("error replying to a REST request {}", e));
             }
         },
         Err(e) => {

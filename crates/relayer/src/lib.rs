@@ -40,6 +40,7 @@ pub mod misbehaviour;
 pub mod object;
 pub mod path;
 pub mod registry;
+pub mod relay_events;
 pub mod rest;
 pub mod sdk_error;
 pub mod spawn;
