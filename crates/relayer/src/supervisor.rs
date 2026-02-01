@@ -4,6 +4,9 @@ use core::convert::Infallible;
 use core::ops::Deref;
 use core::time::Duration;
 use std::sync::RwLock;
+use std::time::Instant;
+
+use once_cell::sync::Lazy;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use itertools::Itertools;
@@ -57,6 +60,37 @@ pub mod cmd;
 use cmd::SupervisorCmd;
 
 use self::{scan::ChainScanner, spawn::SpawnContext};
+
+/// Cached pending packets with refresh timestamp.
+static PENDING_CACHE: Lazy<RwLock<PendingCache>> = Lazy::new(|| RwLock::new(PendingCache::new()));
+
+const PENDING_CACHE_TTL: Duration = Duration::from_secs(60);
+
+struct PendingCache {
+    data: Vec<ChannelPending>,
+    updated: Option<Instant>,
+}
+
+impl PendingCache {
+    fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            updated: None,
+        }
+    }
+
+    fn is_stale(&self) -> bool {
+        match self.updated {
+            None => true,
+            Some(t) => t.elapsed() > PENDING_CACHE_TTL,
+        }
+    }
+}
+
+/// Get cached pending packets.
+pub fn get_cached_pending() -> Vec<ChannelPending> {
+    PENDING_CACHE.read().unwrap().data.clone()
+}
 
 type ArcBatch = Arc<source::Result<EventBatch>>;
 type Subscription = Receiver<ArcBatch>;
@@ -222,6 +256,9 @@ pub fn spawn_supervisor_tasks<Chain: ChainHandle>(
     tasks.extend(batch_tasks);
 
     if let Some(rest_rx) = rest_rx {
+        let pending_task = spawn_pending_cache_worker(registry.clone(), workers.clone());
+        tasks.push(pending_task);
+
         let rest_task = spawn_rest_worker(config, registry, workers.clone(), rest_rx);
         tasks.push(rest_task);
     }
@@ -318,6 +355,28 @@ pub fn spawn_cleanup_worker(workers: Arc<RwLock<WorkerMap>>) -> TaskHandle {
         Some(Duration::from_secs(30)),
         move || -> Result<Next, TaskError<Infallible>> {
             workers.acquire_write().clean_stopped_workers();
+            Ok(Next::Continue)
+        },
+    )
+}
+
+/// Spawn a background task which refreshes the pending packets cache.
+pub fn spawn_pending_cache_worker<Chain: ChainHandle>(
+    registry: SharedRegistry<Chain>,
+    workers: Arc<RwLock<WorkerMap>>,
+) -> TaskHandle {
+    spawn_background_task(
+        error_span!("pending_cache"),
+        Some(Duration::from_secs(10)),
+        move || -> Result<Next, TaskError<Infallible>> {
+            // Only refresh if cache is stale
+            if PENDING_CACHE.read().unwrap().is_stale() {
+                let pending = query_pending_packets(&registry.read(), &workers.acquire_read(), None);
+                let mut cache = PENDING_CACHE.write().unwrap();
+                cache.data = pending;
+                cache.updated = Some(Instant::now());
+                trace!("refreshed pending cache");
+            }
             Ok(Next::Continue)
         },
     )
@@ -787,7 +846,13 @@ fn handle_rest_cmd<Chain: ChainHandle>(
         }
 
         rest::Command::GetPending(chain_filter, reply) => {
-            let pending = query_pending_packets(registry, workers, chain_filter.as_ref());
+            let pending = if chain_filter.is_some() {
+                // Direct query for specific chain
+                query_pending_packets(registry, workers, chain_filter.as_ref())
+            } else {
+                // Return cached data for all chains
+                get_cached_pending()
+            };
             reply
                 .send(Ok(pending))
                 .unwrap_or_else(|e| error!("error replying to a REST request {e}"));
