@@ -5,7 +5,7 @@ use tracing::{error, trace};
 use crate::{
     config::Config,
     relay_events::{get_relay_history, get_relay_stats},
-    rest::request::{ChannelPending, ReplySender},
+    rest::request::{ChainBalance, ChannelPending, ReplySender},
     rest::request::{Request, VersionInfo},
     supervisor::dump_state::SupervisorState,
 };
@@ -35,6 +35,7 @@ pub enum Command {
     DumpState(ReplySender<SupervisorState>),
     ClearPackets(Option<ChainId>, ReplySender<()>),
     GetPending(Option<ChainId>, ReplySender<Vec<ChannelPending>>),
+    GetBalances(ReplySender<Vec<ChainBalance>>),
 }
 
 /// Process incoming REST requests.
@@ -119,6 +120,12 @@ pub fn process_incoming_requests(config: &Config, channel: &Receiver) -> Option<
                 trace!("GetPending chain={:?}", chain_id);
 
                 return Some(Command::GetPending(chain_id, reply_to));
+            }
+
+            Request::GetBalances { reply_to } => {
+                trace!("GetBalances");
+
+                return Some(Command::GetBalances(reply_to));
             }
         },
         Err(e) => {

@@ -34,7 +34,7 @@ use crate::{
     object::Object,
     registry::{Registry, SharedRegistry},
     rest,
-    rest::request::ChannelPending,
+    rest::request::{ChainBalance, ChannelPending},
     supervisor::scan::ScanMode,
     telemetry,
     util::{
@@ -857,6 +857,13 @@ fn handle_rest_cmd<Chain: ChainHandle>(
                 .send(Ok(pending))
                 .unwrap_or_else(|e| error!("error replying to a REST request {e}"));
         }
+
+        rest::Command::GetBalances(reply) => {
+            let balances = query_all_chain_balances(registry);
+            reply
+                .send(Ok(balances))
+                .unwrap_or_else(|e| error!("error replying to a REST request {e}"));
+        }
     }
 }
 
@@ -946,6 +953,43 @@ fn query_pending_packets<Chain: ChainHandle>(
                 Err(e) => {
                     trace!("skip pending query error: {e}");
                 }
+            }
+        }
+    }
+
+    result
+}
+
+/// Query balances for all chains.
+fn query_all_chain_balances<Chain: ChainHandle>(registry: &Registry<Chain>) -> Vec<ChainBalance> {
+    let mut result = Vec::new();
+
+    for chain in registry.chains() {
+        let chain_id = chain.id();
+
+        // Get the wallet address
+        let address = match chain.get_signer() {
+            Ok(signer) => signer.to_string(),
+            Err(e) => {
+                trace!("skip balance query for {chain_id}, no signer: {e}");
+                continue;
+            }
+        };
+
+        // Query all balances
+        match chain.query_all_balances(None) {
+            Ok(balances) => {
+                for b in balances {
+                    result.push(ChainBalance {
+                        chain_id: chain_id.clone(),
+                        address: address.clone(),
+                        balance: b.amount,
+                        denom: b.denom,
+                    });
+                }
+            }
+            Err(e) => {
+                trace!("skip balance query error for {chain_id}: {e}");
             }
         }
     }

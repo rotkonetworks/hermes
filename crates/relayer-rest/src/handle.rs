@@ -9,7 +9,7 @@ use ibc_relayer::supervisor::dump_state::SupervisorState;
 use ibc_relayer::{
     config::ChainConfig,
     rest::{
-        request::{reply_channel, ChannelPending, ReplySender, Request, VersionInfo},
+        request::{reply_channel, ChainBalance, ChannelPending, ReplySender, Request, VersionInfo},
         RestApiError,
     },
 };
@@ -101,6 +101,13 @@ pub fn get_pending(
     chain_id: Option<ChainId>,
 ) -> Result<Vec<ChannelPending>, RestApiError> {
     submit_request(sender, |reply_to| Request::GetPending { chain_id, reply_to })
+}
+
+/// Get balances for all chains
+pub fn get_balances(
+    sender: &channel::Sender<Request>,
+) -> Result<Vec<ChainBalance>, RestApiError> {
+    submit_request(sender, |reply_to| Request::GetBalances { reply_to })
 }
 
 pub fn assemble_version_info(sender: &channel::Sender<Request>) -> Vec<VersionInfo> {

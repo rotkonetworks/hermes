@@ -62,6 +62,19 @@ pub enum Request {
         chain_id: Option<ChainId>,
         reply_to: ReplySender<Vec<ChannelPending>>,
     },
+
+    GetBalances {
+        reply_to: ReplySender<Vec<ChainBalance>>,
+    },
+}
+
+/// Balance for a single chain.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChainBalance {
+    pub chain_id: ChainId,
+    pub address: String,
+    pub balance: String,
+    pub denom: String,
 }
 
 /// Pending packets for a single channel direction.
