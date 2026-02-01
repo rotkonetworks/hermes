@@ -16,7 +16,13 @@ use ibc_relayer_types::{
 };
 
 use crate::{
-    chain::{endpoint::HealthCheck, handle::ChainHandle, tracking::TrackingId},
+    chain::{
+        counterparty::pending_packet_summary,
+        endpoint::HealthCheck,
+        handle::ChainHandle,
+        requests::{IncludeProof, Paginate, QueryChannelRequest, QueryHeight},
+        tracking::TrackingId,
+    },
     config::Config,
     event::{
         source::{self, Error as EventError, ErrorDetail as EventErrorDetail, EventBatch},
@@ -25,6 +31,7 @@ use crate::{
     object::Object,
     registry::{Registry, SharedRegistry},
     rest,
+    rest::request::ChannelPending,
     supervisor::scan::ScanMode,
     telemetry,
     util::{
@@ -778,6 +785,13 @@ fn handle_rest_cmd<Chain: ChainHandle>(
                 .send(Ok(()))
                 .unwrap_or_else(|e| error!("error replying to a REST request {e}"));
         }
+
+        rest::Command::GetPending(chain_filter, reply) => {
+            let pending = query_pending_packets(registry, workers, chain_filter.as_ref());
+            reply
+                .send(Ok(pending))
+                .unwrap_or_else(|e| error!("error replying to a REST request {e}"));
+        }
     }
 }
 
@@ -793,6 +807,85 @@ fn clear_pending_packets(workers: &WorkerMap, chain_id: &ChainId) -> Result<(), 
     }
 
     Ok(())
+}
+
+/// Query pending packets for all channels, optionally filtered by chain.
+fn query_pending_packets<Chain: ChainHandle>(
+    registry: &Registry<Chain>,
+    workers: &WorkerMap,
+    chain_filter: Option<&ChainId>,
+) -> Vec<ChannelPending> {
+    let mut result = Vec::new();
+
+    // Build a map of chain_id -> chain_handle for lookup
+    let chain_handles: HashMap<ChainId, &Chain> = registry
+        .chains()
+        .map(|c| (c.id(), c))
+        .collect();
+
+    // Collect chains to iterate
+    let chains: Vec<ChainId> = if let Some(chain_id) = chain_filter {
+        vec![chain_id.clone()]
+    } else {
+        chain_handles.keys().cloned().collect()
+    };
+
+    for chain_id in &chains {
+        for object in workers.objects_for_chain(chain_id) {
+            let Object::Packet(path) = object else {
+                continue;
+            };
+
+            // Get chain handles
+            let Some(src_chain) = chain_handles.get(&path.src_chain_id) else {
+                continue;
+            };
+            let Some(dst_chain) = chain_handles.get(&path.dst_chain_id) else {
+                continue;
+            };
+
+            // Query channel endpoint
+            let channel_end = match src_chain.query_channel(
+                QueryChannelRequest {
+                    port_id: path.src_port_id.clone(),
+                    channel_id: path.src_channel_id.clone(),
+                    height: QueryHeight::Latest,
+                },
+                IncludeProof::No,
+            ) {
+                Ok((end, _)) => end,
+                Err(e) => {
+                    trace!("skip channel query error: {e}");
+                    continue;
+                }
+            };
+
+            let channel = ibc_relayer_types::core::ics04_channel::channel::IdentifiedChannelEnd::new(
+                path.src_port_id.clone(),
+                path.src_channel_id.clone(),
+                channel_end,
+            );
+
+            // Query pending packets
+            match pending_packet_summary(*src_chain, *dst_chain, &channel, Paginate::All) {
+                Ok(pending) => {
+                    result.push(ChannelPending {
+                        src_chain: path.src_chain_id.clone(),
+                        dst_chain: path.dst_chain_id.clone(),
+                        port: path.src_port_id.to_string(),
+                        channel: path.src_channel_id.to_string(),
+                        unreceived: pending.unreceived_packets,
+                        unreceived_acks: pending.unreceived_acks,
+                    });
+                }
+                Err(e) => {
+                    trace!("skip pending query error: {e}");
+                }
+            }
+        }
+    }
+
+    result
 }
 
 /// Process a batch of events received from a chain.

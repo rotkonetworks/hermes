@@ -5,7 +5,7 @@ use tracing::{error, trace};
 use crate::{
     config::Config,
     relay_events::{get_relay_history, get_relay_stats},
-    rest::request::ReplySender,
+    rest::request::{ChannelPending, ReplySender},
     rest::request::{Request, VersionInfo},
     supervisor::dump_state::SupervisorState,
 };
@@ -34,6 +34,7 @@ pub type Receiver = crossbeam_channel::Receiver<Request>;
 pub enum Command {
     DumpState(ReplySender<SupervisorState>),
     ClearPackets(Option<ChainId>, ReplySender<()>),
+    GetPending(Option<ChainId>, ReplySender<Vec<ChannelPending>>),
 }
 
 /// Process incoming REST requests.
@@ -112,6 +113,12 @@ pub fn process_incoming_requests(config: &Config, channel: &Receiver) -> Option<
                 reply_to
                     .send(Ok(stats))
                     .unwrap_or_else(|e| error!("error replying to a REST request {}", e));
+            }
+
+            Request::GetPending { chain_id, reply_to } => {
+                trace!("GetPending chain={:?}", chain_id);
+
+                return Some(Command::GetPending(chain_id, reply_to));
             }
         },
         Err(e) => {

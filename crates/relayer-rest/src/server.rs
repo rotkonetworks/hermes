@@ -17,8 +17,8 @@ use tokio::task::JoinHandle;
 use ibc_relayer::rest::{request::Request, RestApiError};
 
 use crate::handle::{
-    all_chain_ids, assemble_version_info, chain_config, get_history, get_stats, supervisor_state,
-    trigger_clear_packets,
+    all_chain_ids, assemble_version_info, chain_config, get_history, get_pending, get_stats,
+    supervisor_state, trigger_clear_packets,
 };
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
@@ -109,6 +109,19 @@ async fn stats(Extension(sender): Extension<Sender>) -> impl IntoResponse {
     Json(JsonResult::from(result))
 }
 
+#[derive(Debug, Deserialize)]
+struct PendingParams {
+    chain: Option<ChainId>,
+}
+
+async fn pending(
+    Extension(sender): Extension<Sender>,
+    Query(params): Query<PendingParams>,
+) -> impl IntoResponse {
+    let result = get_pending(&sender, params.chain);
+    Json(JsonResult::from(result))
+}
+
 type Sender = channel::Sender<Request>;
 
 async fn run(addr: SocketAddr, sender: Sender) {
@@ -120,6 +133,7 @@ async fn run(addr: SocketAddr, sender: Sender) {
         .route("/clear_packets", post(clear_packets))
         .route("/history", get(history))
         .route("/stats", get(stats))
+        .route("/pending", get(pending))
         .layer(Extension(sender));
 
     Server::bind(&addr)

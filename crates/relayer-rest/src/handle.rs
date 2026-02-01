@@ -9,7 +9,7 @@ use ibc_relayer::supervisor::dump_state::SupervisorState;
 use ibc_relayer::{
     config::ChainConfig,
     rest::{
-        request::{reply_channel, ReplySender, Request, VersionInfo},
+        request::{reply_channel, ChannelPending, ReplySender, Request, VersionInfo},
         RestApiError,
     },
 };
@@ -93,6 +93,14 @@ pub fn get_history(
 /// Get relay statistics
 pub fn get_stats(sender: &channel::Sender<Request>) -> Result<RelayStats, RestApiError> {
     submit_request(sender, |reply_to| Request::GetStats { reply_to })
+}
+
+/// Get pending packets for all channels
+pub fn get_pending(
+    sender: &channel::Sender<Request>,
+    chain_id: Option<ChainId>,
+) -> Result<Vec<ChannelPending>, RestApiError> {
+    submit_request(sender, |reply_to| Request::GetPending { chain_id, reply_to })
 }
 
 pub fn assemble_version_info(sender: &channel::Sender<Request>) -> Vec<VersionInfo> {

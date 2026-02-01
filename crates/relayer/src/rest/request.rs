@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use ibc_relayer_types::core::ics04_channel::packet::Sequence;
 use ibc_relayer_types::core::ics24_host::identifier::ChainId;
 
 use crate::{
@@ -56,4 +57,20 @@ pub enum Request {
     GetStats {
         reply_to: ReplySender<RelayStats>,
     },
+
+    GetPending {
+        chain_id: Option<ChainId>,
+        reply_to: ReplySender<Vec<ChannelPending>>,
+    },
+}
+
+/// Pending packets for a single channel direction.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChannelPending {
+    pub src_chain: ChainId,
+    pub dst_chain: ChainId,
+    pub port: String,
+    pub channel: String,
+    pub unreceived: Vec<Sequence>,
+    pub unreceived_acks: Vec<Sequence>,
 }
