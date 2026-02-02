@@ -343,7 +343,11 @@ impl CosmosSdkChain {
         use crate::config::EventSourceMode as Mode;
 
         let (event_source, monitor_tx) = match &self.config.event_source {
-            Mode::Push { url, batch_delay, watchdog_timeout } => EventSource::websocket(
+            Mode::Push {
+                url,
+                batch_delay,
+                watchdog_timeout,
+            } => EventSource::websocket(
                 self.config.id.clone(),
                 url.clone(),
                 self.compat_mode,

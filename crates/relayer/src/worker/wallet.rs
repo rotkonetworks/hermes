@@ -14,9 +14,9 @@ pub fn spawn_wallet_worker<Chain: ChainHandle>(chain: Chain) -> TaskHandle {
     spawn_background_task(span, Some(Duration::from_secs(5)), move || {
         // Use Ignore instead of Fatal for config/key errors to survive connection issues.
         // The wallet worker should keep retrying rather than dying on transient failures.
-        let chain_config = chain.config().map_err(|e| {
-            TaskError::Ignore(format!("failed to get chain config: {e}").into())
-        })?;
+        let chain_config = chain
+            .config()
+            .map_err(|e| TaskError::Ignore(format!("failed to get chain config: {e}").into()))?;
 
         if !chain_config.keyring_support() {
             return Err(TaskError::Ignore(

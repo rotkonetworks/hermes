@@ -641,7 +641,10 @@ pub enum EventSourceMode {
 
         /// Watchdog timeout - if no events received within this period, reconnect.
         /// Helps detect stale websocket connections. Default: 300s (5 minutes).
-        #[serde(default = "default::websocket_watchdog_timeout", with = "humantime_serde")]
+        #[serde(
+            default = "default::websocket_watchdog_timeout",
+            with = "humantime_serde"
+        )]
         watchdog_timeout: Duration,
     },
 

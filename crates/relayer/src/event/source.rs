@@ -36,8 +36,14 @@ impl EventSource {
         watchdog_timeout: Duration,
         rt: Arc<TokioRuntime>,
     ) -> Result<(Self, TxEventSourceCmd)> {
-        let (mut source, tx) =
-            websocket::EventSource::new(chain_id, ws_url, rpc_compat, batch_delay, watchdog_timeout, rt)?;
+        let (mut source, tx) = websocket::EventSource::new(
+            chain_id,
+            ws_url,
+            rpc_compat,
+            batch_delay,
+            watchdog_timeout,
+            rt,
+        )?;
 
         source.init_subscriptions()?;
 

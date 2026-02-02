@@ -378,13 +378,11 @@ pub fn spawn_pending_cache_worker<Chain: ChainHandle>(
         Some(Duration::from_secs(10)),
         move || -> Result<Next, TaskError<Infallible>> {
             // Only refresh if cache is stale
-            let is_stale = PENDING_CACHE
-                .read()
-                .map(|c| c.is_stale())
-                .unwrap_or(true);
+            let is_stale = PENDING_CACHE.read().map(|c| c.is_stale()).unwrap_or(true);
 
             if is_stale {
-                let pending = query_pending_packets(&registry.read(), &workers.acquire_read(), None);
+                let pending =
+                    query_pending_packets(&registry.read(), &workers.acquire_read(), None);
                 if let Ok(mut cache) = PENDING_CACHE.write() {
                     cache.data = pending;
                     cache.updated = Some(Instant::now());
@@ -906,10 +904,7 @@ fn query_pending_packets<Chain: ChainHandle>(
     let mut result = Vec::new();
 
     // Build a map of chain_id -> chain_handle for lookup
-    let chain_handles: HashMap<ChainId, &Chain> = registry
-        .chains()
-        .map(|c| (c.id(), c))
-        .collect();
+    let chain_handles: HashMap<ChainId, &Chain> = registry.chains().map(|c| (c.id(), c)).collect();
 
     // Collect chains to iterate
     let chains: Vec<ChainId> = if let Some(chain_id) = chain_filter {
@@ -948,11 +943,12 @@ fn query_pending_packets<Chain: ChainHandle>(
                 }
             };
 
-            let channel = ibc_relayer_types::core::ics04_channel::channel::IdentifiedChannelEnd::new(
-                path.src_port_id.clone(),
-                path.src_channel_id.clone(),
-                channel_end,
-            );
+            let channel =
+                ibc_relayer_types::core::ics04_channel::channel::IdentifiedChannelEnd::new(
+                    path.src_port_id.clone(),
+                    path.src_channel_id.clone(),
+                    channel_end,
+                );
 
             // Query pending packets
             match pending_packet_summary(*src_chain, *dst_chain, &channel, Paginate::All) {

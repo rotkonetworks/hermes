@@ -100,13 +100,14 @@ pub fn get_pending(
     sender: &channel::Sender<Request>,
     chain_id: Option<ChainId>,
 ) -> Result<Vec<ChannelPending>, RestApiError> {
-    submit_request(sender, |reply_to| Request::GetPending { chain_id, reply_to })
+    submit_request(sender, |reply_to| Request::GetPending {
+        chain_id,
+        reply_to,
+    })
 }
 
 /// Get balances for all chains
-pub fn get_balances(
-    sender: &channel::Sender<Request>,
-) -> Result<Vec<ChainBalance>, RestApiError> {
+pub fn get_balances(sender: &channel::Sender<Request>) -> Result<Vec<ChainBalance>, RestApiError> {
     submit_request(sender, |reply_to| Request::GetBalances { reply_to })
 }
 

@@ -242,7 +242,8 @@ pub mod memo {
                 ErrorDetail::TooLong(sub) => D::Error::custom(format!(
                     "memo_prefix is too long: {} characters (max {}). \
                     Please shorten your memo_prefix configuration.",
-                    sub.length, Self::MAX_LEN
+                    sub.length,
+                    Self::MAX_LEN
                 )),
             })
         }
