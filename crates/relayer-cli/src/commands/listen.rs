@@ -150,11 +150,12 @@ fn subscribe(
     match chain_config {
         ChainConfig::CosmosSdk(config) | ChainConfig::Namada(config) => {
             let (event_source, monitor_tx) = match &config.event_source {
-                EventSourceMode::Push { url, batch_delay } => EventSource::websocket(
+                EventSourceMode::Push { url, batch_delay, watchdog_timeout } => EventSource::websocket(
                     chain_config.id().clone(),
                     url.clone(),
                     compat_mode,
                     *batch_delay,
+                    *watchdog_timeout,
                     rt,
                 ),
                 EventSourceMode::Pull {
@@ -184,11 +185,12 @@ fn subscribe(
         }
         ChainConfig::Penumbra(config) => {
             let (event_source, monitor_tx) = match &config.event_source {
-                EventSourceMode::Push { url, batch_delay } => EventSource::websocket(
+                EventSourceMode::Push { url, batch_delay, watchdog_timeout } => EventSource::websocket(
                     chain_config.id().clone(),
                     url.clone(),
                     compat_mode,
                     *batch_delay,
+                    *watchdog_timeout,
                     rt,
                 ),
                 EventSourceMode::Pull {
