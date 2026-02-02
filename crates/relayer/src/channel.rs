@@ -2226,13 +2226,19 @@ impl<ChainA: ChainHandle, ChainB: ChainHandle> Channel<ChainA, ChainB> {
         &self,
     ) -> Result<Option<IbcEvent>, ChannelError> {
         // Check if error query_upgrade_error
-        let height = self.a_chain().query_latest_height().unwrap();
+        let height = self
+            .a_chain()
+            .query_latest_height()
+            .map_err(|e| ChannelError::chain_query(self.a_chain().id(), e))?;
+        let channel_id = self
+            .a_channel_id()
+            .ok_or_else(ChannelError::missing_local_channel_id)?;
         let upgrade_error = self
             .a_chain()
             .query_upgrade_error(
                 QueryUpgradeErrorRequest {
                     port_id: self.a_side.port_id.clone().to_string(),
-                    channel_id: self.a_side.channel_id.clone().unwrap().clone().to_string(),
+                    channel_id: channel_id.to_string(),
                 },
                 height,
                 IncludeProof::No,
