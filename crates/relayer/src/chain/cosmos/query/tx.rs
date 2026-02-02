@@ -364,6 +364,7 @@ pub fn filter_matching_event(
             && seqs.contains(&packet.sequence)
     }
 
+    eprintln!("DEBUG filter_matching_event: event_kind={} expected={}", event.kind, request.event_id.as_str());
     tracing::debug!(
         event_kind = %event.kind,
         expected_event_id = %request.event_id.as_str(),
