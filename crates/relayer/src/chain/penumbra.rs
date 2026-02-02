@@ -1271,9 +1271,12 @@ impl ChainEndpoint for PenumbraChain {
         crate::telemetry!(query, self.id(), "query_packet_commitment");
         let mut client = self.ibc_channel_grpc_client.clone();
 
-        let height = match req.height {
-            QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
+        // Penumbra nodes aggressively prune state, so always query at latest height (0)
+        // when proofs are needed. The response includes the actual proofHeight.
+        let height = match (&req.height, &include_proof) {
+            (_, IncludeProof::Yes) => 0.to_string(), // Always use latest for proofs
+            (QueryHeight::Latest, _) => 0.to_string(),
+            (QueryHeight::Specific(h), _) => h.to_string(),
         };
         let proto_request: RawQueryPacketCommitmentRequest = req.into();
 
