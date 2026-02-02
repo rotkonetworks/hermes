@@ -187,6 +187,10 @@ pub mod default {
         Duration::from_millis(500)
     }
 
+    pub fn websocket_watchdog_timeout() -> Duration {
+        Duration::from_secs(300) // 5 minutes
+    }
+
     pub fn clock_drift() -> Duration {
         Duration::from_secs(5)
     }
@@ -634,6 +638,11 @@ pub enum EventSourceMode {
         /// Maximum amount of time to wait for a NewBlock event before emitting the event batch
         #[serde(default = "default::batch_delay", with = "humantime_serde")]
         batch_delay: Duration,
+
+        /// Watchdog timeout - if no events received within this period, reconnect.
+        /// Helps detect stale websocket connections. Default: 300s (5 minutes).
+        #[serde(default = "default::websocket_watchdog_timeout", with = "humantime_serde")]
+        watchdog_timeout: Duration,
     },
 
     /// Pull-based event source, via RPC /block_results

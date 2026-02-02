@@ -25,7 +25,6 @@ use ibc_relayer_types::{core::ics24_host::identifier::ChainId, events::IbcEvent}
 use crate::{
     chain::tracking::TrackingId,
     event::{bus::EventBus, error::*, IbcEventWithHeight},
-    link::TIMEOUT as PENDING_TIMEOUT,
     telemetry,
     util::{
         retry::{retry_with_index, RetryResult},
@@ -66,6 +65,8 @@ pub struct EventSource {
     chain_id: ChainId,
     /// Delay until batch is emitted
     batch_delay: Duration,
+    /// Watchdog timeout - reconnect if no events within this period
+    watchdog_timeout: Duration,
     /// WebSocket to collect events from
     client: WebSocketClient,
     /// Async task handle for the WebSocket client's driver
@@ -103,6 +104,7 @@ impl EventSource {
         ws_url: WebSocketClientUrl,
         rpc_compat: CompatMode,
         batch_delay: Duration,
+        watchdog_timeout: Duration,
         rt: Arc<TokioRuntime>,
     ) -> Result<(Self, TxEventSourceCmd)> {
         let event_bus = EventBus::new();
@@ -124,6 +126,7 @@ impl EventSource {
             rt,
             chain_id,
             batch_delay,
+            watchdog_timeout,
             client,
             driver_handle,
             event_queries,
@@ -339,16 +342,16 @@ impl EventSource {
                         }
                     }
                 }
-                _ = sleep(PENDING_TIMEOUT) => {
+                _ = sleep(self.watchdog_timeout) => {
                     // No events received within the watchdog timeout period.
                     // This likely indicates a stale connection that is not receiving
                     // events despite appearing connected. Propagate error so supervisor
                     // clears pending packets, then trigger reconnection.
                     warn!(
                         "no events received for {} seconds, assuming stale connection",
-                        PENDING_TIMEOUT.as_secs()
+                        self.watchdog_timeout.as_secs()
                     );
-                    self.propagate_error(Error::watchdog_timeout(PENDING_TIMEOUT.as_secs()));
+                    self.propagate_error(Error::watchdog_timeout(self.watchdog_timeout.as_secs()));
                     return Next::Reconnect;
                 }
             };
