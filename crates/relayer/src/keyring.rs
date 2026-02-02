@@ -182,16 +182,11 @@ impl<S: SigningKeyPairSized> KeyStore<S> for Test {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Store {
     Memory,
+    #[default]
     Test,
-}
-
-impl Default for Store {
-    fn default() -> Self {
-        Self::Test
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
