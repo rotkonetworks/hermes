@@ -130,12 +130,32 @@ pub async fn query_packets_from_txs(
 
     for seq in &request.sequences {
         // Query the latest 10 txs which include the event specified in the query request
+        let query = packet_query(request, *seq);
+        tracing::debug!(
+            %query,
+            chain_id = %chain_id,
+            sequence = %seq,
+            "executing packet tx_search query"
+        );
         let response = rpc_client
-            .tx_search(packet_query(request, *seq), false, 1, 10, Order::Descending)
+            .tx_search(query, false, 1, 10, Order::Descending)
             .await
             .map_err(|e| Error::rpc(rpc_address.clone(), e))?;
 
+        tracing::debug!(
+            chain_id = %chain_id,
+            sequence = %seq,
+            tx_count = response.txs.len(),
+            total_count = response.total_count,
+            "tx_search response received"
+        );
+
         if response.txs.is_empty() {
+            tracing::debug!(
+                chain_id = %chain_id,
+                sequence = %seq,
+                "tx_search returned no transactions"
+            );
             continue;
         }
 
@@ -340,18 +360,49 @@ pub fn filter_matching_event(
         return None;
     }
 
-    let ibc_event = ibc_event_try_from_abci_event(event).ok()?;
+    let ibc_event = match ibc_event_try_from_abci_event(event) {
+        Ok(ev) => ev,
+        Err(e) => {
+            tracing::debug!(
+                event_kind = %event.kind,
+                error = %e,
+                "failed to parse abci event into ibc event"
+            );
+            return None;
+        }
+    };
 
     match ibc_event {
-        IbcEvent::SendPacket(ref send_ev)
-            if matches_packet(request, seqs.to_vec(), &send_ev.packet) =>
-        {
-            Some(ibc_event)
+        IbcEvent::SendPacket(ref send_ev) => {
+            if matches_packet(request, seqs.to_vec(), &send_ev.packet) {
+                Some(ibc_event)
+            } else {
+                tracing::debug!(
+                    packet_src_port = %send_ev.packet.source_port,
+                    packet_src_channel = %send_ev.packet.source_channel,
+                    packet_dst_port = %send_ev.packet.destination_port,
+                    packet_dst_channel = %send_ev.packet.destination_channel,
+                    packet_sequence = %send_ev.packet.sequence,
+                    request_src_port = %request.source_port_id,
+                    request_src_channel = %request.source_channel_id,
+                    request_dst_port = %request.destination_port_id,
+                    request_dst_channel = %request.destination_channel_id,
+                    "SendPacket event did not match request"
+                );
+                None
+            }
         }
-        IbcEvent::WriteAcknowledgement(ref ack_ev)
-            if matches_packet(request, seqs.to_vec(), &ack_ev.packet) =>
-        {
-            Some(ibc_event)
+        IbcEvent::WriteAcknowledgement(ref ack_ev) => {
+            if matches_packet(request, seqs.to_vec(), &ack_ev.packet) {
+                Some(ibc_event)
+            } else {
+                tracing::debug!(
+                    packet_src_port = %ack_ev.packet.source_port,
+                    packet_src_channel = %ack_ev.packet.source_channel,
+                    "WriteAck event did not match request"
+                );
+                None
+            }
         }
         _ => None,
     }
