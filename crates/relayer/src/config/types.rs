@@ -239,10 +239,11 @@ pub mod memo {
             let value = String::deserialize(deserializer)?;
 
             Memo::new(value).map_err(|e| match e.detail() {
-                ErrorDetail::TooLong(sub) => D::Error::invalid_length(
-                    sub.length,
-                    &format!("a string length of at most {}", Self::MAX_LEN).as_str(),
-                ),
+                ErrorDetail::TooLong(sub) => D::Error::custom(format!(
+                    "memo_prefix is too long: {} characters (max {}). \
+                    Please shorten your memo_prefix configuration.",
+                    sub.length, Self::MAX_LEN
+                )),
             })
         }
     }
