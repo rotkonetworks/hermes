@@ -385,6 +385,6 @@ mod tests {
         .unwrap_err()
         .to_string();
 
-        assert!(err.contains("a string length of at most"));
+        assert!(err.contains("memo_prefix is too long"));
     }
 }
