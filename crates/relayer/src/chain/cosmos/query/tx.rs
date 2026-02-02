@@ -333,10 +333,15 @@ fn packet_from_tx_search_response(
     eprintln!("DEBUG packet_from_tx: chain={} seq={} tx_height={} events_count={}",
         chain_id, seq, height, response.tx_result.events.len());
 
+    // Compare only block heights, not revision numbers.
+    // The query_height may come from a GRPC response that doesn't preserve revision,
+    // but the tx height is constructed from chain_id.version(). Comparing revisions
+    // would incorrectly skip valid packets (e.g., revision 1 vs revision 0).
     if let QueryHeight::Specific(query_height) = request.height.get() {
-        eprintln!("DEBUG packet_from_tx: comparing height {} vs query_height {}", height, query_height);
-        if height > query_height {
-            eprintln!("DEBUG packet_from_tx: SKIPPING - height > query_height");
+        eprintln!("DEBUG packet_from_tx: comparing block_height {} vs query_block_height {}",
+            height.revision_height(), query_height.revision_height());
+        if height.revision_height() > query_height.revision_height() {
+            eprintln!("DEBUG packet_from_tx: SKIPPING - block height > query block height");
             return Ok(None);
         }
     }
