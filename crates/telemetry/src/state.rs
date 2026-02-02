@@ -225,6 +225,9 @@ pub struct TelemetryState {
 
     /// Observed ICS31 CrossChainQuery error Responses
     cross_chain_query_error_responses: Counter<u64>,
+
+    /// Number of times packet data query returned empty results
+    packet_data_query_empty: Counter<u64>,
 }
 
 impl TelemetryState {
@@ -498,6 +501,11 @@ impl TelemetryState {
             cross_chain_query_error_responses: meter
                 .u64_counter("cross_chain_query_error_responses")
                 .with_description("Number of ICS-31 error query responses")
+                .init(),
+
+            packet_data_query_empty: meter
+                .u64_counter("packet_data_query_empty")
+                .with_description("Number of times packet data query returned empty results for pending sequences")
                 .init(),
         }
     }
@@ -1271,6 +1279,24 @@ impl TelemetryState {
                 self.cross_chain_query_error_responses.add(1, labels);
             }
         }
+    }
+
+    /// Record when packet data query returns empty for pending sequences.
+    /// This helps identify RPC endpoint issues where packet data is not available.
+    pub fn packet_data_query_empty(
+        &self,
+        chain_id: &ChainId,
+        channel_id: &ChannelId,
+        port_id: &PortId,
+        sequences_count: u64,
+    ) {
+        let labels = &[
+            KeyValue::new("chain", chain_id.to_string()),
+            KeyValue::new("channel", channel_id.to_string()),
+            KeyValue::new("port", port_id.to_string()),
+        ];
+
+        self.packet_data_query_empty.add(sequences_count, labels);
     }
 }
 

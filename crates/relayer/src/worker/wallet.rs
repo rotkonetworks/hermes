@@ -12,9 +12,11 @@ pub fn spawn_wallet_worker<Chain: ChainHandle>(chain: Chain) -> TaskHandle {
     let span = error_span!("wallet", chain = %chain.id());
 
     spawn_background_task(span, Some(Duration::from_secs(5)), move || {
-        let chain_config = chain
-            .config()
-            .map_err(|e| TaskError::Fatal(format!("failed to get chain config: {e}").into()))?;
+        // Use Ignore instead of Fatal for config/key errors to survive connection issues.
+        // The wallet worker should keep retrying rather than dying on transient failures.
+        let chain_config = chain.config().map_err(|e| {
+            TaskError::Ignore(format!("failed to get chain config: {e}").into())
+        })?;
 
         if !chain_config.keyring_support() {
             return Err(TaskError::Ignore(
@@ -23,7 +25,7 @@ pub fn spawn_wallet_worker<Chain: ChainHandle>(chain: Chain) -> TaskHandle {
         }
 
         let key = chain.get_key().map_err(|e| {
-            TaskError::Fatal(Box::new(format!(
+            TaskError::Ignore(Box::new(format!(
                 "failed to get key in use by the relayer: {e}"
             )))
         })?;

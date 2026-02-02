@@ -12,6 +12,7 @@ use crate::chain::requests::{Qualified, QueryHeight, QueryPacketEventDataRequest
 use crate::error::Error;
 use crate::event::IbcEventWithHeight;
 use crate::path::PathIdentifiers;
+use crate::telemetry;
 use crate::util::collate::CollatedIterExt;
 
 /// Returns an iterator on batches of packet events.
@@ -45,6 +46,15 @@ where
                     warn!("no packet data was pulled at height {query_height} for sequences {}, this might be due to the data not being available on the configured endpoint. \
                     Please verify that the RPC endpoint has the required packet data, for more details see https://hermes.informal.systems/advanced/troubleshooting/cross-comp-config.html#uncleared-pending-packets",
                     chunk.iter().copied().collated().format(", "));
+
+                    // Track empty packet data queries for monitoring RPC endpoint issues
+                    telemetry!(
+                        packet_data_query_empty,
+                        &src_chain.id(),
+                        &path.channel_id,
+                        &path.port_id,
+                        chunk.len() as u64
+                    );
                 } else {
                     info!(
                         events.total = %events_total,

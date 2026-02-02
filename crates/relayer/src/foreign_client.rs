@@ -1890,7 +1890,9 @@ impl<DstChain: ChainHandle, SrcChain: ChainHandle> ForeignClient<DstChain, SrcCh
 
             Err(e) => match e.detail() {
                 ForeignClientErrorDetail::MisbehaviourExit(s) => {
-                    error!("misbehaviour checking is being disabled, reason: {s}");
+                    // Use warn instead of error - this is expected on some chains (e.g., older SDKs
+                    // that don't include headers in UpdateClient events, or ibc-gov10 chains)
+                    warn!("misbehaviour checking is being disabled, reason: {s}");
 
                     MisbehaviourResults::CannotExecute
                 }

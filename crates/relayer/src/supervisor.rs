@@ -89,7 +89,15 @@ impl PendingCache {
 
 /// Get cached pending packets.
 pub fn get_cached_pending() -> Vec<ChannelPending> {
-    PENDING_CACHE.read().unwrap().data.clone()
+    PENDING_CACHE
+        .read()
+        .unwrap_or_else(|poisoned| {
+            // Lock was poisoned, recover by returning inner guard
+            warn!("pending cache lock was poisoned, recovering");
+            poisoned.into_inner()
+        })
+        .data
+        .clone()
 }
 
 type ArcBatch = Arc<source::Result<EventBatch>>;
@@ -370,12 +378,20 @@ pub fn spawn_pending_cache_worker<Chain: ChainHandle>(
         Some(Duration::from_secs(10)),
         move || -> Result<Next, TaskError<Infallible>> {
             // Only refresh if cache is stale
-            if PENDING_CACHE.read().unwrap().is_stale() {
+            let is_stale = PENDING_CACHE
+                .read()
+                .map(|c| c.is_stale())
+                .unwrap_or(true);
+
+            if is_stale {
                 let pending = query_pending_packets(&registry.read(), &workers.acquire_read(), None);
-                let mut cache = PENDING_CACHE.write().unwrap();
-                cache.data = pending;
-                cache.updated = Some(Instant::now());
-                trace!("refreshed pending cache");
+                if let Ok(mut cache) = PENDING_CACHE.write() {
+                    cache.data = pending;
+                    cache.updated = Some(Instant::now());
+                    trace!("refreshed pending cache");
+                } else {
+                    warn!("failed to acquire pending cache write lock");
+                }
             }
             Ok(Next::Continue)
         },
