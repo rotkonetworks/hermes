@@ -175,6 +175,7 @@ impl FullNode {
                 event_source: config::EventSourceMode::Push {
                     url: WebSocketClientUrl::from_str(&self.chain_driver.websocket_address())?,
                     batch_delay: config::default::batch_delay(),
+                    watchdog_timeout: config::default::websocket_watchdog_timeout(),
                 },
                 rpc_timeout: config::default::rpc_timeout(),
                 trusted_node: false,
@@ -220,6 +221,7 @@ impl FullNode {
                 event_source: config::EventSourceMode::Push {
                     url: WebSocketClientUrl::from_str(&self.chain_driver.websocket_address())?,
                     batch_delay: config::default::batch_delay(),
+                    watchdog_timeout: config::default::websocket_watchdog_timeout(),
                 },
                 rpc_timeout: config::default::rpc_timeout(),
                 trusted_node: false,

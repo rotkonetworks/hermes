@@ -2821,6 +2821,18 @@ fn do_health_check(chain: &CosmosSdkChain) -> Result<(), Error> {
         return Err(Error::no_historical_entries(chain_id.clone()));
     }
 
+    // Test gRPC connectivity by querying staking params
+    // This catches misconfigured gRPC endpoints early
+    if let Err(e) = chain.query_staking_params() {
+        warn!(
+            "gRPC endpoint '{}' may be misconfigured or unreachable: {}",
+            grpc_address, e
+        );
+        // Don't fail the health check, just warn - some chains may not implement this
+    } else {
+        debug!("gRPC connectivity check passed for '{}'", chain_id);
+    }
+
     Ok(())
 }
 
