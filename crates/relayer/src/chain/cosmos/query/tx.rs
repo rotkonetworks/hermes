@@ -364,12 +364,25 @@ pub fn filter_matching_event(
             && seqs.contains(&packet.sequence)
     }
 
+    tracing::debug!(
+        event_kind = %event.kind,
+        expected_event_id = %request.event_id.as_str(),
+        "filter_matching_event called"
+    );
+
     if event.kind != request.event_id.as_str() {
         return None;
     }
 
     let ibc_event = match ibc_event_try_from_abci_event(event) {
-        Ok(ev) => ev,
+        Ok(ev) => {
+            tracing::debug!(
+                event_kind = %event.kind,
+                ibc_event_type = ?std::mem::discriminant(&ev),
+                "successfully parsed abci event"
+            );
+            ev
+        }
         Err(e) => {
             tracing::debug!(
                 event_kind = %event.kind,
@@ -412,7 +425,14 @@ pub fn filter_matching_event(
                 None
             }
         }
-        _ => None,
+        other => {
+            tracing::debug!(
+                event_kind = %event.kind,
+                ibc_event = ?other,
+                "ibc event type not SendPacket or WriteAck, ignoring"
+            );
+            None
+        }
     }
 }
 
