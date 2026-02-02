@@ -163,6 +163,14 @@ pub async fn query_packets_from_txs(
 
         // Process each tx in descending order
         for tx in response.txs {
+            tracing::debug!(
+                chain_id = %chain_id,
+                sequence = %seq,
+                tx_hash = %tx.hash,
+                event_count = tx.tx_result.events.len(),
+                event_types = ?tx.tx_result.events.iter().map(|e| &e.kind).collect::<Vec<_>>(),
+                "processing tx from tx_search"
+            );
             // Check if the tx contains and event which matches the query
             if let Some(event) = packet_from_tx_search_response(chain_id, request, *seq, &tx)? {
                 // We found the event
