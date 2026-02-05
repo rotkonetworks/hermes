@@ -1328,7 +1328,11 @@ impl ChainEndpoint for PenumbraChain {
         request: QueryPacketCommitmentsRequest,
     ) -> Result<(Vec<Sequence>, ibc_relayer_types::Height), Error> {
         let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let mut request = tonic::Request::new(request.into());
+        // Penumbra nodes aggressively prune state, so always query at latest height (0)
+        request
+            .metadata_mut()
+            .insert("height", "0".parse().unwrap());
 
         let response = self
             .rt
@@ -1417,7 +1421,11 @@ impl ChainEndpoint for PenumbraChain {
     ) -> Result<Vec<Sequence>, Error> {
         let mut client = self.ibc_channel_grpc_client.clone();
 
-        let request = tonic::Request::new(request.into());
+        let mut request = tonic::Request::new(request.into());
+        // Penumbra nodes aggressively prune state, so always query at latest height (0)
+        request
+            .metadata_mut()
+            .insert("height", "0".parse().unwrap());
 
         let mut response = self
             .rt
@@ -1486,7 +1494,11 @@ impl ChainEndpoint for PenumbraChain {
         request: QueryPacketAcknowledgementsRequest,
     ) -> Result<(Vec<Sequence>, ibc_relayer_types::Height), Error> {
         let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let mut request = tonic::Request::new(request.into());
+        // Penumbra nodes aggressively prune state, so always query at latest height (0)
+        request
+            .metadata_mut()
+            .insert("height", "0".parse().unwrap());
 
         let response = self
             .rt
@@ -1513,7 +1525,11 @@ impl ChainEndpoint for PenumbraChain {
         request: QueryUnreceivedAcksRequest,
     ) -> Result<Vec<Sequence>, Error> {
         let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let mut request = tonic::Request::new(request.into());
+        // Penumbra nodes aggressively prune state, so always query at latest height (0)
+        request
+            .metadata_mut()
+            .insert("height", "0".parse().unwrap());
 
         let mut response = self
             .rt
