@@ -304,6 +304,19 @@ impl PenumbraChain {
         tracked_msgs: TrackedMsgs,
     ) -> Result<penumbra_sdk_transaction::Transaction, anyhow::Error> {
         let mut view_client = self.view_client.lock().await.clone();
+
+        // Ensure view service is fully synced before building transaction.
+        // This is critical because Penumbra spend proofs require valid SCT anchors,
+        // and stale anchors will cause "spend proof did not verify" errors.
+        tracing::debug!("syncing view service before building transaction");
+        let mut stream = ViewClient::status_stream(&mut view_client).await?;
+        while let Some(status) = stream.next().await.transpose()? {
+            if !status.catching_up {
+                break;
+            }
+        }
+        tracing::debug!("view service sync complete");
+
         let gas_prices = view_client
             .gas_prices(GasPricesRequest {})
             .await
