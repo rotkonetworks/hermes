@@ -692,21 +692,43 @@ impl ChainEndpoint for PenumbraChain {
         &mut self,
         tracked_msgs: TrackedMsgs,
     ) -> Result<Vec<tendermint_rpc::endpoint::broadcast::tx_sync::Response>, Error> {
+        // the original implementation here broadcast directly to cometbft via
+        // broadcast_tx_sync, bypassing the penumbra ViewServer entirely. this meant
+        // the view database was never notified of pending transactions, so when the
+        // relay loop's AsyncSender fired the next tx immediately, the Planner would
+        // select the same already-spent notes for fee payment, causing nullifier
+        // double-spend failures and view db state corruption.
+        //
+        // penumbra does not have a protocol-level one-tx-per-block constraint --
+        // multiple txs from the same wallet in the same block are valid as long as
+        // they spend different notes (nullifier uniqueness is checked sequentially
+        // within check_and_execute). the issue was purely that the ViewServer must
+        // be in the broadcast path so it can track which notes are pending and
+        // exclude them from subsequent planning.
+        //
+        // we route through send_messages_in_penumbratx (which uses
+        // ViewClient::broadcast_transaction) and wait for commit to ensure the
+        // view db is fully synced before the next tx is planned.
         let runtime = self.rt.clone();
-        let penumbra_tx = runtime
-            .block_on(self.build_penumbra_tx(tracked_msgs.clone()))
-            .map_err(|e| {
-                tracing::error!("error building penumbra transaction: {}", e);
-                Error::temp_penumbra_error(e.to_string())
-            })?;
+        let txid = runtime.block_on(self.send_messages_in_penumbratx(tracked_msgs, true))?;
 
-        let tx_bytes = penumbra_tx.encode_to_vec();
+        // Construct a synthetic tx_sync::Response for the relay sender interface.
+        // The transaction has already been confirmed at this point.
+        let hash = tendermint::Hash::from_bytes(
+            tendermint::hash::Algorithm::Sha256,
+            &txid.0,
+        )
+        .expect("transaction id should be valid sha256 hash");
 
-        let res = runtime
-            .block_on(self.tendermint_rpc_client.broadcast_tx_sync(tx_bytes))
-            .map_err(|e| Error::rpc(self.config.rpc_addr.clone(), e))?;
+        let response = tendermint_rpc::endpoint::broadcast::tx_sync::Response {
+            code: tendermint::abci::Code::Ok,
+            data: Default::default(),
+            log: String::new(),
+            hash,
+            codespace: String::new(),
+        };
 
-        Ok(vec![res])
+        Ok(vec![response])
     }
 
     fn verify_header(
