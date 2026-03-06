@@ -476,13 +476,9 @@ impl<ChainA: ChainHandle, ChainB: ChainHandle> RelayPath<ChainA, ChainB> {
     ) -> Result<(), LinkError> {
         let _span = span!(Level::ERROR, "schedule_packet_clearing", ?height).entered();
 
-        let clear_height = height
-            .map(|h| h.decrement().map_err(|e| LinkError::decrement_height(h, e)))
-            .transpose()?;
+        self.relay_pending_packets(height, clear_limit)?;
 
-        self.relay_pending_packets(clear_height, clear_limit)?;
-
-        debug!(height = ?clear_height, "done relaying pending packets at clear height");
+        debug!(height = ?height, "done relaying pending packets at clear height");
 
         Ok(())
     }
