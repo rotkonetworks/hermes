@@ -566,12 +566,29 @@ impl ChainEndpoint for PenumbraChain {
 
         let sync_height = rt
             .block_on(async {
-                let mut stream = ViewClient::status_stream(&mut view_client).await?;
-                let mut sync_height = 0u64;
-                while let Some(status) = stream.next().await.transpose()? {
-                    sync_height = status.full_sync_height;
+                // Penumbra's compact block stream may return blocks out of order
+                // during initial sync, causing transient errors. Retry up to 5 times.
+                for attempt in 1..=5 {
+                    match async {
+                        let mut stream = ViewClient::status_stream(&mut view_client).await?;
+                        let mut sync_height = 0u64;
+                        while let Some(status) = stream.next().await.transpose()? {
+                            sync_height = status.full_sync_height;
+                        }
+                        Ok::<u64, anyhow::Error>(sync_height)
+                    }.await {
+                        Ok(height) => return Ok(height),
+                        Err(e) => {
+                            tracing::warn!(attempt, error = %e, "view service sync failed, retrying...");
+                            if attempt < 5 {
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                    }
                 }
-                Ok(sync_height)
+                unreachable!()
             })
             .map_err(|e: anyhow::Error| Error::temp_penumbra_error(e.to_string()))?;
 
