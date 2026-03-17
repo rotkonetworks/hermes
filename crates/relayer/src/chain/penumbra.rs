@@ -890,7 +890,7 @@ impl ChainEndpoint for PenumbraChain {
 
         let height = match req.height {
             QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
+            QueryHeight::Specific(h) => h.revision_height().to_string(),
         };
 
         let proto_request: RawQueryClientStateRequest = req.into();
@@ -945,7 +945,7 @@ impl ChainEndpoint for PenumbraChain {
 
         let height: String = match req.query_height {
             QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
+            QueryHeight::Specific(h) => h.revision_height().to_string(),
         };
 
         let mut proto_request: RawQueryConsensusStatesRequest = req.into();
@@ -1116,7 +1116,7 @@ impl ChainEndpoint for PenumbraChain {
 
         let height = match req.height {
             QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
+            QueryHeight::Specific(h) => h.revision_height().to_string(),
         };
         let connection_id = req.connection_id.clone();
 
@@ -1226,7 +1226,7 @@ impl ChainEndpoint for PenumbraChain {
 
         let height = match req.height {
             QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
+            QueryHeight::Specific(h) => h.revision_height().to_string(),
         };
 
         let proto_request: RawQueryChannelRequest = req.into();
@@ -1293,12 +1293,9 @@ impl ChainEndpoint for PenumbraChain {
         crate::telemetry!(query, self.id(), "query_packet_commitment");
         let mut client = self.ibc_channel_grpc_client.clone();
 
-        // Penumbra nodes aggressively prune state, so always query at latest height (0)
-        // when proofs are needed. The response includes the actual proofHeight.
-        let height = match (&req.height, &include_proof) {
-            (_, IncludeProof::Yes) => 0.to_string(), // Always use latest for proofs
-            (QueryHeight::Latest, _) => 0.to_string(),
-            (QueryHeight::Specific(h), _) => h.to_string(),
+        let height = match &req.height {
+            QueryHeight::Latest => 0.to_string(),
+            QueryHeight::Specific(h) => h.revision_height().to_string(),
         };
         let proto_request: RawQueryPacketCommitmentRequest = req.into();
 
@@ -1371,7 +1368,7 @@ impl ChainEndpoint for PenumbraChain {
         let mut client = self.ibc_channel_grpc_client.clone();
         let height = match req.height {
             QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
+            QueryHeight::Specific(h) => h.revision_height().to_string(),
         };
         let port_id = req.port_id.clone();
         let channel_id = req.channel_id.clone();
@@ -1451,7 +1448,7 @@ impl ChainEndpoint for PenumbraChain {
 
         let height = match req.height {
             QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
+            QueryHeight::Specific(h) => h.revision_height().to_string(),
         };
 
         let proto_request: RawQueryPacketAcknowledgementRequest = req.into();
@@ -1549,7 +1546,7 @@ impl ChainEndpoint for PenumbraChain {
 
         let height = match req.height {
             QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
+            QueryHeight::Specific(h) => h.revision_height().to_string(),
         };
 
         let proto_request: RawQueryNextSequenceReceiveRequest = req.into();
