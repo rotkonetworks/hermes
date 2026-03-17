@@ -18,18 +18,15 @@ pub fn spawn_wallet_worker<Chain: ChainHandle>(chain: Chain) -> TaskHandle {
             .config()
             .map_err(|e| TaskError::Ignore(format!("failed to get chain config: {e}").into()))?;
 
-        if !chain_config.keyring_support() {
-            trace!("chain {} does not support keyring, disabling wallet worker", chain.id());
-            return Err(TaskError::Fatal(
-                format!("chain {} does not support keyring", chain.id()).into(),
-            ));
-        }
-
-        let key = chain.get_key().map_err(|e| {
-            TaskError::Ignore(Box::new(format!(
-                "failed to get key in use by the relayer: {e}"
-            )))
-        })?;
+        let account = if chain_config.keyring_support() {
+            chain.get_key().map_err(|e| {
+                TaskError::Ignore(Box::new(format!(
+                    "failed to get key in use by the relayer: {e}"
+                )))
+            })?.account()
+        } else {
+            chain.id().to_string()
+        };
 
         let balance = chain.query_balance(None, None).map_err(|e| {
             TaskError::Ignore(Box::new(format!(
@@ -42,21 +39,21 @@ pub fn spawn_wallet_worker<Chain: ChainHandle>(chain: Chain) -> TaskHandle {
                 telemetry!(
                     wallet_balance,
                     &chain.id(),
-                    &key.account(),
+                    &account,
                     amount,
                     &balance.denom,
                 );
-                trace!(%amount, denom = %balance.denom, account = %key.account(), "wallet balance");
+                trace!(%amount, denom = %balance.denom, %account, "wallet balance");
                 telemetry!(
                     update_period_fees,
                     &chain.id(),
-                    &key.account(),
+                    &account,
                     &balance.denom
                 );
             }
             Err(e) => {
                 warn!(
-                    %balance.amount, denom = %balance.denom, account = %key.account(),
+                    %balance.amount, denom = %balance.denom, %account,
                     "unable to parse the wallet balance into a f64, the balance will therefore not be reported to telemetry. Reason: {}", e
                 );
             }
