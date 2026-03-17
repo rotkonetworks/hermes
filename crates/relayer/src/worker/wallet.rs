@@ -19,7 +19,8 @@ pub fn spawn_wallet_worker<Chain: ChainHandle>(chain: Chain) -> TaskHandle {
             .map_err(|e| TaskError::Ignore(format!("failed to get chain config: {e}").into()))?;
 
         if !chain_config.keyring_support() {
-            return Err(TaskError::Ignore(
+            trace!("chain {} does not support keyring, disabling wallet worker", chain.id());
+            return Err(TaskError::Fatal(
                 format!("chain {} does not support keyring", chain.id()).into(),
             ));
         }
