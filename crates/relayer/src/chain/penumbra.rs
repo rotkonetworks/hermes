@@ -307,12 +307,12 @@ impl PenumbraChain {
         let gas_prices = view_client
             .gas_prices(GasPricesRequest {})
             .await
-            .unwrap()
+            .map_err(|e| anyhow::anyhow!("failed to query gas prices: {}", e))?
             .into_inner()
             .gas_prices
-            .expect("gas prices must be available")
+            .ok_or_else(|| anyhow::anyhow!("gas prices not available from view service"))?
             .try_into()
-            .unwrap();
+            .map_err(|e: anyhow::Error| anyhow::anyhow!("failed to parse gas prices: {}", e))?;
         // TODO: should this be a config option?
         let fee_tier = FeeTier::default();
 
@@ -330,7 +330,8 @@ impl PenumbraChain {
                 }),
             };
             let ibc_action =
-                IbcRelay::try_from(raw_ibcrelay_msg).expect("failed to convert to IbcRelay");
+                IbcRelay::try_from(raw_ibcrelay_msg)
+                    .map_err(|e| anyhow::anyhow!("failed to convert to IbcRelay: {}", e))?;
             planner.ibc_action(ibc_action);
         }
 
@@ -377,7 +378,7 @@ impl PenumbraChain {
             let mut last_height = current_height;
 
             while last_height - current_height < 2 {
-                thread::sleep(Duration::from_secs(1));
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 last_height = self
                     .tendermint_rpc_client
                     .status()
