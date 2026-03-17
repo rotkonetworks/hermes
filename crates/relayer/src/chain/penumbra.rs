@@ -20,7 +20,10 @@ use ibc_proto::ibc::core::client::v1::QueryClientStateRequest as RawQueryClientS
 use ibc_proto::ibc::core::client::v1::QueryConsensusStateRequest as RawQueryConsensusStatesRequest;
 use ibc_proto::ibc::core::connection::v1::QueryConnectionRequest as RawQueryConnectionRequest;
 
+use ibc_relayer_types::core::ics04_channel::packet::PacketMsgType;
 use ibc_relayer_types::core::ics23_commitment::commitment::CommitmentProofBytes;
+use ibc_relayer_types::core::ics24_host::identifier::{ChannelId, PortId};
+use ibc_relayer_types::proofs::Proofs;
 use once_cell::sync::Lazy;
 use penumbra_sdk_proto::core::app::v1::AppParametersRequest;
 use penumbra_sdk_proto::core::component::ibc::v1::IbcRelay as ProtoIbcRelay;
@@ -816,6 +819,131 @@ impl ChainEndpoint for PenumbraChain {
     {
         // This is hardcoded for now.
         Ok(b"ibc-data".to_vec().try_into().unwrap())
+    }
+
+    /// Penumbra override: query proofs at latest height since historical state is pruned.
+    /// Uses the chain's current height for the proof height in the IBC message.
+    fn build_packet_proofs(
+        &self,
+        packet_type: PacketMsgType,
+        port_id: PortId,
+        channel_id: ChannelId,
+        sequence: Sequence,
+        _height: ICSHeight,
+    ) -> Result<Proofs, Error> {
+        // Get the current chain height to use as proof height
+        let status = self.query_application_status()?;
+        let latest_height = status.height;
+
+        // Query proofs at latest height (Penumbra prunes historical state)
+        let (maybe_packet_proof, channel_proof) = match packet_type {
+            PacketMsgType::Recv => {
+                let (_, proof) = self.query_packet_commitment(
+                    QueryPacketCommitmentRequest {
+                        port_id, channel_id, sequence,
+                        height: QueryHeight::Latest,
+                    },
+                    IncludeProof::Yes,
+                )?;
+                (proof, None)
+            }
+            PacketMsgType::Ack => {
+                let (_, proof) = self.query_packet_acknowledgement(
+                    QueryPacketAcknowledgementRequest {
+                        port_id, channel_id, sequence,
+                        height: QueryHeight::Latest,
+                    },
+                    IncludeProof::Yes,
+                )?;
+                (proof, None)
+            }
+            PacketMsgType::TimeoutUnordered => {
+                let (_, proof) = self.query_packet_receipt(
+                    QueryPacketReceiptRequest {
+                        port_id, channel_id, sequence,
+                        height: QueryHeight::Latest,
+                    },
+                    IncludeProof::Yes,
+                )?;
+                (proof, None)
+            }
+            PacketMsgType::TimeoutOrdered => {
+                let (_, proof) = self.query_next_sequence_receive(
+                    QueryNextSequenceReceiveRequest {
+                        port_id, channel_id,
+                        height: QueryHeight::Latest,
+                    },
+                    IncludeProof::Yes,
+                )?;
+                (proof, None)
+            }
+            PacketMsgType::TimeoutOnCloseUnordered => {
+                let channel_proof = {
+                    let (_, maybe_channel_proof) = self.query_channel(
+                        QueryChannelRequest {
+                            port_id: port_id.clone(),
+                            channel_id: channel_id.clone(),
+                            height: QueryHeight::Latest,
+                        },
+                        IncludeProof::Yes,
+                    )?;
+                    let Some(channel_merkle_proof) = maybe_channel_proof else {
+                        return Err(Error::queried_proof_not_found());
+                    };
+                    Some(CommitmentProofBytes::try_from(channel_merkle_proof)
+                        .map_err(Error::malformed_proof)?)
+                };
+                let (_, proof) = self.query_packet_receipt(
+                    QueryPacketReceiptRequest {
+                        port_id, channel_id, sequence,
+                        height: QueryHeight::Latest,
+                    },
+                    IncludeProof::Yes,
+                )?;
+                (proof, channel_proof)
+            }
+            PacketMsgType::TimeoutOnCloseOrdered => {
+                let channel_proof = {
+                    let (_, maybe_channel_proof) = self.query_channel(
+                        QueryChannelRequest {
+                            port_id: port_id.clone(),
+                            channel_id: channel_id.clone(),
+                            height: QueryHeight::Latest,
+                        },
+                        IncludeProof::Yes,
+                    )?;
+                    let Some(channel_merkle_proof) = maybe_channel_proof else {
+                        return Err(Error::queried_proof_not_found());
+                    };
+                    Some(CommitmentProofBytes::try_from(channel_merkle_proof)
+                        .map_err(Error::malformed_proof)?)
+                };
+                let (_, proof) = self.query_next_sequence_receive(
+                    QueryNextSequenceReceiveRequest {
+                        port_id, channel_id,
+                        height: QueryHeight::Latest,
+                    },
+                    IncludeProof::Yes,
+                )?;
+                (proof, channel_proof)
+            }
+        };
+
+        let Some(packet_proof) = maybe_packet_proof else {
+            return Err(Error::queried_proof_not_found());
+        };
+
+        let proofs = Proofs::new(
+            CommitmentProofBytes::try_from(packet_proof).map_err(Error::malformed_proof)?,
+            None,
+            None,
+            None,
+            channel_proof,
+            latest_height.increment(),
+        )
+        .map_err(Error::malformed_proof)?;
+
+        Ok(proofs)
     }
 
     fn query_application_status(&self) -> Result<ChainStatus, Error> {
