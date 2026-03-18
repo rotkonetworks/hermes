@@ -1,4 +1,7 @@
 pub mod config;
+pub mod error;
+pub mod query;
+pub mod tx;
 pub mod util;
 pub mod version;
 
@@ -1314,16 +1317,9 @@ impl ChainEndpoint for PenumbraChain {
         crate::telemetry!(query, self.id(), "query_packet_commitment");
         let mut client = self.ibc_channel_grpc_client.clone();
 
-        let height = match &req.height {
-            QueryHeight::Latest => 0.to_string(),
-            QueryHeight::Specific(h) => h.to_string(),
-        };
-        let proto_request: RawQueryPacketCommitmentRequest = req.into();
-
+        let proto_request: RawQueryPacketCommitmentRequest = req.clone().into();
         let mut request = proto_request.into_request();
-        request
-            .metadata_mut()
-            .insert("height", height.parse().unwrap());
+        query::set_height_metadata(&mut request, &req.height);
 
         let response = self
             .rt
@@ -1331,24 +1327,12 @@ impl ChainEndpoint for PenumbraChain {
             .map_err(|e| Error::grpc_status(e, "query_packet_commitment".to_owned()))?
             .into_inner();
 
-        let packet_commitment = response.commitment;
-        let raw_proof_bytes = response.proof;
+        let proof = match include_proof {
+            IncludeProof::No => None,
+            IncludeProof::Yes => Some(query::decode_proof(response.proof, "query_packet_commitment")?),
+        };
 
-        match include_proof {
-            IncludeProof::No => Ok((packet_commitment, None)),
-            IncludeProof::Yes => {
-                if raw_proof_bytes.is_empty() {
-                    return Err(Error::empty_response_proof());
-                }
-
-                let raw_proof = RawMerkleProof::decode(raw_proof_bytes.as_ref())
-                    .map_err(|e| Error::other(e.to_string()))?;
-
-                let proof = raw_proof.into();
-
-                Ok((packet_commitment, Some(proof)))
-            }
-        }
+        Ok((response.commitment, proof))
     }
 
     fn query_packet_commitments(
