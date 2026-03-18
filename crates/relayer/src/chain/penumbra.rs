@@ -113,7 +113,10 @@ use crate::{
 };
 
 use crate::chain::penumbra::config::PenumbraConfig;
-use crate::chain::penumbra::service::layers::{ProofDecodingLayer, ProofDecodingResponse, TracingLayer, HeightMetadataLayer};
+use crate::chain::penumbra::service::layers::{
+    HeightMetadataLayer, ProofDecodingLayer, ProofDecodingResponse, RetryLayer, RetryPolicy,
+    TimeoutLayer, TracingLayer,
+};
 use crate::chain::penumbra::service::{IbcQuery, IbcQueryResponse, PenumbraGrpcQueryService};
 
 pub struct PenumbraChain {
@@ -622,11 +625,14 @@ impl ChainEndpoint for PenumbraChain {
 
         tracing::info!("ibc grpc query clients connected");
 
-        // Build the tower-composed query service stack (Phase 3).
-        // Layer order (outermost first): ProofDecoding -> Tracing -> HeightMetadata -> Grpc
+        // Build the tower-composed query service stack (Phase 4).
+        // Layer order (outermost first):
+        //   ProofDecoding -> Tracing -> Retry -> Timeout -> HeightMetadata -> Grpc
         let query_service = tower::ServiceBuilder::new()
             .layer(ProofDecodingLayer)
             .layer(TracingLayer::new(config.id.to_string()))
+            .layer(RetryLayer::new(RetryPolicy::default()))
+            .layer(TimeoutLayer::new(config.rpc_timeout))
             .layer(HeightMetadataLayer)
             .service(PenumbraGrpcQueryService::new(
                 ibc_client_grpc_client.clone(),

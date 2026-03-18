@@ -6,10 +6,13 @@
 //! - **`HeightMetadataLayer`** — injects `QueryHeight` into gRPC metadata.
 //! - **`ProofDecodingLayer`** — decodes raw proof bytes into `MerkleProof`.
 //! - **`TracingLayer`** — emits structured tracing spans per query.
+//! - **`RetryLayer`** — retries transient gRPC errors with exponential backoff.
+//! - **`TimeoutLayer`** — wraps each call with a deadline.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use ibc_relayer_types::core::ics23_commitment::merkle::MerkleProof;
 use tower::{Layer, Service};
@@ -264,5 +267,218 @@ where
 
         let fut = self.inner.call(req);
         Box::pin(fut.instrument(span))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RetryLayer
+// ---------------------------------------------------------------------------
+
+/// Configuration for retry behaviour on transient gRPC errors.
+#[derive(Debug, Clone)]
+pub struct RetryPolicy {
+    /// Initial delay before the first retry.
+    pub initial_backoff: Duration,
+    /// Maximum delay between retries (caps the exponential growth).
+    pub max_backoff: Duration,
+    /// Maximum number of retry attempts (not counting the original call).
+    pub max_retries: u32,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(5),
+            max_retries: 3,
+        }
+    }
+}
+
+/// Transient gRPC status codes that warrant a retry.
+///
+/// We match on substrings of the error's `Display` output because the
+/// underlying `tonic::Status` is converted to a stringly-typed
+/// `Error::TempPenumbraError` before it reaches this layer.
+const TRANSIENT_PATTERNS: &[&str] = &[
+    "Unavailable",
+    "DeadlineExceeded",
+    "Aborted",
+    // Internal can be transient (server-side hiccup).
+    "Internal",
+];
+
+/// Returns `true` when the error looks like a transient gRPC failure that
+/// is worth retrying.
+fn is_transient(err: &Error) -> bool {
+    let msg = err.to_string();
+    TRANSIENT_PATTERNS.iter().any(|p| msg.contains(p))
+}
+
+/// A tower `Layer` that retries transient gRPC errors with exponential
+/// backoff.
+///
+/// Only errors whose `Display` representation contains a known transient
+/// gRPC status code (Unavailable, DeadlineExceeded, Aborted, Internal) are
+/// retried. Permanent errors (NotFound, InvalidArgument, PermissionDenied,
+/// etc.) are returned immediately.
+#[derive(Debug, Clone)]
+pub struct RetryLayer {
+    policy: RetryPolicy,
+}
+
+impl RetryLayer {
+    /// Create a retry layer with the given policy.
+    pub fn new(policy: RetryPolicy) -> Self {
+        Self { policy }
+    }
+}
+
+impl<S> Layer<S> for RetryLayer {
+    type Service = RetryService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        RetryService {
+            inner,
+            policy: self.policy.clone(),
+        }
+    }
+}
+
+/// Service produced by [`RetryLayer`].
+#[derive(Debug, Clone)]
+pub struct RetryService<S> {
+    inner: S,
+    policy: RetryPolicy,
+}
+
+impl<S> Service<IbcQuery> for RetryService<S>
+where
+    S: Service<IbcQuery, Response = IbcQueryResponse, Error = Error> + Clone + Send + 'static,
+    S::Future: Send,
+{
+    type Response = IbcQueryResponse;
+    type Error = Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: IbcQuery) -> Self::Future {
+        let mut svc = self.inner.clone();
+        let policy = self.policy.clone();
+
+        Box::pin(async move {
+            let mut backoff = policy.initial_backoff;
+            let mut last_err: Option<Error> = None;
+
+            for attempt in 0..=policy.max_retries {
+                // On retries we need to wait before calling again.
+                if attempt > 0 {
+                    let err_ref = last_err.as_ref().expect("last_err set on retry");
+                    tracing::warn!(
+                        query = req.name(),
+                        attempt = attempt,
+                        max_retries = policy.max_retries,
+                        backoff_ms = backoff.as_millis() as u64,
+                        error = %err_ref,
+                        "retrying transient gRPC error"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    // Exponential backoff capped at max.
+                    backoff = std::cmp::min(backoff * 2, policy.max_backoff);
+                }
+
+                match svc.call(req.clone()).await {
+                    Ok(resp) => return Ok(resp),
+                    Err(err) => {
+                        if !is_transient(&err) || attempt == policy.max_retries {
+                            return Err(err);
+                        }
+                        last_err = Some(err);
+                    }
+                }
+            }
+
+            // Unreachable: the loop always returns.
+            Err(last_err.unwrap())
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TimeoutLayer
+// ---------------------------------------------------------------------------
+
+/// A tower `Layer` that wraps each service call with a deadline.
+///
+/// If the inner service does not complete within the configured duration,
+/// the call returns an error instead of blocking indefinitely.
+#[derive(Debug, Clone)]
+pub struct TimeoutLayer {
+    duration: Duration,
+}
+
+impl TimeoutLayer {
+    /// Create a timeout layer with the given deadline duration.
+    pub fn new(duration: Duration) -> Self {
+        Self { duration }
+    }
+}
+
+impl<S> Layer<S> for TimeoutLayer {
+    type Service = TimeoutService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        TimeoutService {
+            inner,
+            duration: self.duration,
+        }
+    }
+}
+
+/// Service produced by [`TimeoutLayer`].
+#[derive(Debug, Clone)]
+pub struct TimeoutService<S> {
+    inner: S,
+    duration: Duration,
+}
+
+impl<S> Service<IbcQuery> for TimeoutService<S>
+where
+    S: Service<IbcQuery, Response = IbcQueryResponse, Error = Error> + Clone + Send + 'static,
+    S::Future: Send,
+{
+    type Response = IbcQueryResponse;
+    type Error = Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: IbcQuery) -> Self::Future {
+        let query_name = req.name();
+        let duration = self.duration;
+        let fut = self.inner.call(req);
+
+        Box::pin(async move {
+            match tokio::time::timeout(duration, fut).await {
+                Ok(result) => result,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        query = query_name,
+                        timeout_ms = duration.as_millis() as u64,
+                        "query timed out"
+                    );
+                    Err(Error::temp_penumbra_error(format!(
+                        "gRPC query `{}` timed out after {}ms",
+                        query_name,
+                        duration.as_millis()
+                    )))
+                }
+            }
+        })
     }
 }

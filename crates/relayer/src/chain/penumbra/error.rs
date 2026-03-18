@@ -15,7 +15,7 @@ pub enum PenumbraError {
         source: tonic::transport::Error,
     },
 
-    #[error("gRPC query `{method}` failed")]
+    #[error("gRPC query `{method}` failed: {source}")]
     GrpcStatus {
         method: &'static str,
         #[source]
