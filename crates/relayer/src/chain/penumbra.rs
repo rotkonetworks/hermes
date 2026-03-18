@@ -15,17 +15,8 @@ use ibc_relayer_types::core::ics02_client;
 use ibc_relayer_types::core::ics04_channel;
 use pbjson_types;
 
-use ibc_proto::ibc::core::channel::v1::QueryChannelRequest as RawQueryChannelRequest;
-use ibc_proto::ibc::core::channel::v1::QueryNextSequenceReceiveRequest as RawQueryNextSequenceReceiveRequest;
-use ibc_proto::ibc::core::channel::v1::QueryPacketAcknowledgementRequest as RawQueryPacketAcknowledgementRequest;
-use ibc_proto::ibc::core::channel::v1::QueryPacketCommitmentRequest as RawQueryPacketCommitmentRequest;
-use ibc_proto::ibc::core::channel::v1::QueryPacketReceiptRequest as RawQueryPacketReceiptRequest;
-use ibc_proto::ibc::core::client::v1::QueryClientStateRequest as RawQueryClientStateRequest;
-use ibc_proto::ibc::core::client::v1::QueryConsensusStateRequest as RawQueryConsensusStatesRequest;
-use ibc_proto::ibc::core::connection::v1::QueryConnectionRequest as RawQueryConnectionRequest;
 
 use ibc_relayer_types::core::ics04_channel::packet::PacketMsgType;
-use ibc_relayer_types::core::ics23_commitment::commitment::CommitmentProofBytes;
 use ibc_relayer_types::core::ics24_host::identifier::{ChannelId, PortId};
 use ibc_relayer_types::proofs::Proofs;
 use once_cell::sync::Lazy;
@@ -55,7 +46,6 @@ use crate::light_client::LightClient;
 use crate::util::pretty::{
     PrettyIdentifiedChannel, PrettyIdentifiedClientState, PrettyIdentifiedConnection,
 };
-use ibc_proto::ibc::core::commitment::v1::MerkleProof as RawMerkleProof;
 use ibc_proto::ibc::core::{
     channel::v1::query_client::QueryClient as IbcChannelQueryClient,
     client::v1::query_client::QueryClient as IbcClientQueryClient,
@@ -97,7 +87,6 @@ use tendermint_light_client::verifier::types::LightBlock as TmLightBlock;
 use tendermint_rpc::{Client as _, HttpClient};
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::sync::Mutex;
-use tonic::IntoRequest;
 use tower::{Service, ServiceExt};
 
 use std::path::PathBuf;
@@ -937,34 +926,26 @@ impl ChainEndpoint for PenumbraChain {
         req: QueryClientStateRequest,
         include_proof: IncludeProof,
     ) -> Result<(AnyClientState, Option<MerkleProof>), Error> {
-        crate::telemetry!(query, self.id(), "query_client_state");
-        let mut client = self.ibc_client_grpc_client.clone();
+        let query = IbcQuery::ClientState(req, include_proof);
 
-        let height = req.height.clone();
-        let proto_request: RawQueryClientStateRequest = req.into();
-        let mut request = proto_request.into_request();
-        query::set_height_metadata(&mut request, &height);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        // TODO(erwan): for now, playing a bit fast-and-loose with the error handling.
-        let response = self
-            .rt
-            .block_on(client.client_state(request))
-            .map_err(|e| Error::other(e.to_string()))?
-            .into_inner();
+        match result.response {
+            IbcQueryResponse::ClientState(response) => {
+                let raw_client_state = response
+                    .client_state
+                    .ok_or_else(Error::empty_response_value)?;
+                let client_state: AnyClientState = raw_client_state
+                    .try_into()
+                    .map_err(|e: ics02_client::error::Error| Error::other(e.to_string()))?;
 
-        let raw_client_state = response
-            .client_state
-            .ok_or_else(Error::empty_response_value)?;
-        let client_state: AnyClientState = raw_client_state
-            .try_into()
-            .map_err(|e: ics02_client::error::Error| Error::other(e.to_string()))?;
-
-        let proof = match include_proof {
-            IncludeProof::Yes => Some(query::decode_proof(response.proof, "query_client_state")?),
-            IncludeProof::No => None,
-        };
-
-        Ok((client_state, proof))
+                Ok((client_state, result.proof))
+            }
+            _ => unreachable!("query_client_state: unexpected response variant"),
+        }
     }
 
     fn query_consensus_state(
@@ -972,47 +953,34 @@ impl ChainEndpoint for PenumbraChain {
         req: QueryConsensusStateRequest,
         include_proof: IncludeProof,
     ) -> Result<(AnyConsensusState, Option<MerkleProof>), Error> {
-        crate::telemetry!(query, self.id(), "query_consensus_state");
-        let mut client = self.ibc_client_grpc_client.clone();
+        let query = IbcQuery::ConsensusState(req, include_proof);
 
-        let query_height = req.query_height.clone();
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let mut proto_request: RawQueryConsensusStatesRequest = req.into();
-        // TODO(erwan): the connection handshake fails when we request the latest height.
-        // This is ostensibly a bug in hermes, in particular when we build the handshake message.
-        // However, for now, we can work around this by always overriding the flag to `false`.
-        proto_request.latest_height = false;
+        match result.response {
+            IbcQueryResponse::ConsensusState(response) => {
+                let raw_consensus_state = response
+                    .consensus_state
+                    .ok_or_else(Error::empty_response_value)?;
 
-        let mut request = proto_request.into_request();
-        query::set_height_metadata(&mut request, &query_height);
-        let response = self
-            .rt
-            .block_on(client.consensus_state(request))
-            .map_err(|e| Error::other(e.to_string()))?
-            .into_inner();
+                let consensus_state: AnyConsensusState = raw_consensus_state
+                    .try_into()
+                    .map_err(|e: ics02_client::error::Error| Error::other(e.to_string()))?;
 
-        let raw_consensus_state = response
-            .consensus_state
-            .ok_or_else(Error::empty_response_value)?;
-        let raw_proof_bytes = response.proof;
+                if !matches!(consensus_state, AnyConsensusState::Tendermint(_)) {
+                    return Err(Error::consensus_state_type_mismatch(
+                        ClientType::Tendermint,
+                        consensus_state.client_type(),
+                    ));
+                }
 
-        let consensus_state: AnyConsensusState = raw_consensus_state
-            .try_into()
-            .map_err(|e: ics02_client::error::Error| Error::other(e.to_string()))?;
-
-        if !matches!(consensus_state, AnyConsensusState::Tendermint(_)) {
-            return Err(Error::consensus_state_type_mismatch(
-                ClientType::Tendermint,
-                consensus_state.client_type(),
-            ));
+                Ok((consensus_state, result.proof))
+            }
+            _ => unreachable!("query_consensus_state: unexpected response variant"),
         }
-
-        let proof = match include_proof {
-            IncludeProof::No => None,
-            IncludeProof::Yes => Some(query::decode_proof(raw_proof_bytes, "query_consensus_state")?),
-        };
-
-        Ok((consensus_state, proof))
     }
 
     fn query_consensus_state_heights(
@@ -1129,39 +1097,30 @@ impl ChainEndpoint for PenumbraChain {
         req: QueryConnectionRequest,
         include_proof: IncludeProof,
     ) -> Result<(ConnectionEnd, Option<MerkleProof>), Error> {
-        crate::telemetry!(query, self.id(), "query_connection");
-        let mut client = self.ibc_connection_grpc_client.clone();
-
-        let height = req.height.clone();
         let connection_id = req.connection_id.clone();
+        let query = IbcQuery::Connection(req, include_proof);
 
-        let proto_request: RawQueryConnectionRequest = req.into();
-        let mut request = proto_request.into_request();
-        query::set_height_metadata(&mut request, &height);
-
-        let response = self.rt.block_on(client.connection(request)).map_err(|e| {
-            if e.code() == tonic::Code::NotFound {
-                Error::connection_not_found(connection_id.clone())
-            } else {
-                Error::grpc_status(e, "query_connection".to_owned())
-            }
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
         })?;
 
-        let resp = response.into_inner();
-        let connection_end: ConnectionEnd = match resp.connection {
-            Some(raw_connection) => raw_connection.try_into().map_err(Error::ics03)?,
-            None => {
-                // When no connection is found, the GRPC call itself should return
-                // the NotFound error code. Nevertheless even if the call is successful,
-                // the connection field may not be present, because in protobuf3
-                // everything is optional.
-                return Err(Error::connection_not_found(connection_id));
-            }
-        };
+        match result.response {
+            IbcQueryResponse::Connection(resp) => {
+                let connection_end: ConnectionEnd = match resp.connection {
+                    Some(raw_connection) => raw_connection.try_into().map_err(Error::ics03)?,
+                    None => {
+                        // When no connection is found, the GRPC call itself should return
+                        // the NotFound error code. Nevertheless even if the call is successful,
+                        // the connection field may not be present, because in protobuf3
+                        // everything is optional.
+                        return Err(Error::connection_not_found(connection_id));
+                    }
+                };
 
-        match include_proof {
-            IncludeProof::Yes => Ok((connection_end, Some(decode_merkle_proof(resp.proof)?))),
-            IncludeProof::No => Ok((connection_end, None)),
+                Ok((connection_end, result.proof))
+            }
+            _ => unreachable!("query_connection: unexpected response variant"),
         }
     }
 
@@ -1234,30 +1193,24 @@ impl ChainEndpoint for PenumbraChain {
         req: QueryChannelRequest,
         include_proof: IncludeProof,
     ) -> Result<(ChannelEnd, Option<MerkleProof>), Error> {
-        let mut client = self.ibc_channel_grpc_client.clone();
+        let query = IbcQuery::Channel(req, include_proof);
 
-        let height = req.height.clone();
-        let proto_request: RawQueryChannelRequest = req.into();
-        let mut request = proto_request.into_request();
-        query::set_height_metadata(&mut request, &height);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let response = self
-            .rt
-            .block_on(client.channel(request))
-            .map_err(|e| Error::grpc_status(e, "query_channel".to_owned()))?
-            .into_inner();
+        match result.response {
+            IbcQueryResponse::Channel(response) => {
+                let channel = response.channel.ok_or_else(Error::empty_response_value)?;
+                let channel_end: ChannelEnd = channel
+                    .try_into()
+                    .map_err(|e: ics04_channel::error::Error| Error::other(e.to_string()))?;
 
-        let channel = response.channel.ok_or_else(Error::empty_response_value)?;
-        let channel_end: ChannelEnd = channel
-            .try_into()
-            .map_err(|e: ics04_channel::error::Error| Error::other(e.to_string()))?;
-
-        let proof = match include_proof {
-            IncludeProof::No => None,
-            IncludeProof::Yes => Some(query::decode_proof(response.proof, "query_channel")?),
-        };
-
-        Ok((channel_end, proof))
+                Ok((channel_end, result.proof))
+            }
+            _ => unreachable!("query_channel: unexpected response variant"),
+        }
     }
 
     fn query_channel_client_state(
@@ -1332,39 +1285,19 @@ impl ChainEndpoint for PenumbraChain {
         include_proof: IncludeProof,
         // What a strange API -erwan.
     ) -> Result<(Vec<u8>, Option<MerkleProof>), Error> {
-        crate::telemetry!(query, self.id(), "query_packet_receipt");
-        let mut client = self.ibc_channel_grpc_client.clone();
-        let height = req.height.clone();
-        let port_id = req.port_id.clone();
-        let channel_id = req.channel_id.clone();
-        let sequence = req.sequence;
+        let query = IbcQuery::PacketReceipt(req, include_proof);
 
-        let proto_request: RawQueryPacketReceiptRequest = req.into();
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let mut request = proto_request.into_request();
-        query::set_height_metadata(&mut request, &height);
-
-        let response = self
-            .rt
-            .block_on(client.packet_receipt(request))
-            .map_err(|e| {
-                if e.code() == tonic::Code::NotFound {
-                    Error::other(format!(
-                        "packet receipt not found for port_id: {}, channel_id: {}, sequence: {}",
-                        port_id, channel_id, sequence
-                    ))
-                } else {
-                    Error::grpc_status(e, "query_packet_receipt".to_owned())
-                }
-            })?
-            .into_inner();
-
-        let proof = match include_proof {
-            IncludeProof::No => None,
-            IncludeProof::Yes => Some(query::decode_proof(response.proof, "query_packet_receipt")?),
-        };
-
-        Ok((vec![response.received.into()], proof))
+        match result.response {
+            IbcQueryResponse::PacketReceipt(response) => {
+                Ok((vec![response.received.into()], result.proof))
+            }
+            _ => unreachable!("query_packet_receipt: unexpected response variant"),
+        }
     }
 
     fn query_unreceived_packets(
@@ -1395,27 +1328,19 @@ impl ChainEndpoint for PenumbraChain {
         include_proof: IncludeProof,
         // TODO(erwan): This API should change. Why are we thrashing raw bytes around?
     ) -> Result<(Vec<u8>, Option<MerkleProof>), Error> {
-        crate::telemetry!(query, self.id(), "query_packet_acknowledgement");
-        let mut client = self.ibc_channel_grpc_client.clone();
+        let query = IbcQuery::PacketAcknowledgement(req, include_proof);
 
-        let height = req.height.clone();
-        let proto_request: RawQueryPacketAcknowledgementRequest = req.into();
-        let mut request = proto_request.into_request();
-        query::set_height_metadata(&mut request, &height);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let response = self
-            .rt
-            .block_on(client.packet_acknowledgement(request))
-            .map_err(|e| Error::grpc_status(e, "query_packet_acknowledgement".to_owned()))?
-            .into_inner();
-
-        let raw_ack = response.acknowledgement;
-        let proof = match include_proof {
-            IncludeProof::No => None,
-            IncludeProof::Yes => Some(query::decode_proof(response.proof, "query_packet_acknowledgement")?),
-        };
-
-        Ok((raw_ack, proof))
+        match result.response {
+            IbcQueryResponse::PacketAcknowledgement(response) => {
+                Ok((response.acknowledgement, result.proof))
+            }
+            _ => unreachable!("query_packet_acknowledgement: unexpected response variant"),
+        }
     }
 
     fn query_packet_acknowledgements(
@@ -1471,42 +1396,20 @@ impl ChainEndpoint for PenumbraChain {
         req: QueryNextSequenceReceiveRequest,
         include_proof: IncludeProof,
     ) -> Result<(Sequence, Option<MerkleProof>), Error> {
-        crate::time!(
-            "query_next_sequence_receive",
-            {
-                "src_chain": self.config().id().to_string(),
+        let query = IbcQuery::NextSequenceReceive(req, include_proof);
+
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
+
+        match result.response {
+            IbcQueryResponse::NextSequenceReceive(response) => {
+                let next_seq: Sequence = response.next_sequence_receive.into();
+                Ok((next_seq, result.proof))
             }
-        );
-        crate::telemetry!(query, self.id(), "query_next_sequence_receive");
-        let mut client = self.ibc_channel_grpc_client.clone();
-
-        let height = req.height.clone();
-        let proto_request: RawQueryNextSequenceReceiveRequest = req.into();
-        let mut request = proto_request.into_request();
-        query::set_height_metadata(&mut request, &height);
-
-        let response = self
-            .rt
-            .block_on(client.next_sequence_receive(request))
-            .map_err(|e| Error::grpc_status(e, "query_next_sequence_receive".to_owned()))?
-            .into_inner();
-
-        // TODO(erwan): previously, there was a comment explaining that we expect
-        // a u64 encoded in big-endian in the ABCI query branch. Now that we use
-        // gRPC for this query, we shouldn't have to worry about that (this also match previous behavior
-        // when a proof is *not* requested). Nevertheless. I will keep the comment here for now:
-        // ```
-        // Note: We expect the return to be a u64 encoded in big-endian. Refer to ibc-go:
-        // https://github.com/cosmos/ibc-go/blob/25767f6bdb5bab2c2a116b41d92d753c93e18121/modules/core/04-channel/client/utils/utils.go#L191
-        // ```
-        let next_seq: Sequence = response.next_sequence_receive.into();
-
-        let proof = match include_proof {
-            IncludeProof::Yes => Some(query::decode_proof(response.proof, "query_next_sequence_receive")?),
-            IncludeProof::No => None,
-        };
-
-        Ok((next_seq, proof))
+            _ => unreachable!("query_next_sequence_receive: unexpected response variant"),
+        }
     }
 
     fn query_txs(&self, request: QueryTxRequest) -> Result<Vec<IbcEventWithHeight>, Error> {
@@ -1728,18 +1631,6 @@ fn client_id_suffix(client_id: &ClientId) -> Option<u64> {
         .and_then(|e| e.parse::<u64>().ok())
 }
 
-fn decode_merkle_proof(proof_bytes: Vec<u8>) -> Result<MerkleProof, Error> {
-    let proof_bytes = CommitmentProofBytes::try_from(proof_bytes).map_err(|e| {
-        Error::temp_penumbra_error(format!("couldn't decode CommitmentProofBytes: {}", e))
-    })?;
-    let raw_proof: RawMerkleProof = RawMerkleProof::try_from(proof_bytes).map_err(|e| {
-        Error::temp_penumbra_error(format!("couldn't decode RawMerkleProof: {}", e))
-    })?;
-
-    let proof = MerkleProof::from(raw_proof);
-
-    Ok(proof)
-}
 
 const LEAF_DOMAIN_SEPARATOR: &[u8] = b"JMT::LeafNode";
 const INTERNAL_DOMAIN_SEPARATOR: &[u8] = b"JMT::IntrnalNode";
