@@ -18,7 +18,9 @@ pub fn spawn_wallet_worker<Chain: ChainHandle>(chain: Chain) -> TaskHandle {
             .config()
             .map_err(|e| TaskError::Ignore(format!("failed to get chain config: {e}").into()))?;
 
-        let account = if chain_config.keyring_support() {
+        let account = if let Some(addr) = chain_config.relayer_account() {
+            addr
+        } else if chain_config.keyring_support() {
             chain.get_key().map_err(|e| {
                 TaskError::Ignore(Box::new(format!(
                     "failed to get key in use by the relayer: {e}"

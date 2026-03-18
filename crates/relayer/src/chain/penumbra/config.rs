@@ -86,3 +86,13 @@ pub struct PenumbraConfig {
     /// this with the Hermes keyring, but it's a low-priority item.
     pub kms_config: soft_kms::Config,
 }
+
+impl PenumbraConfig {
+    /// Returns the bech32 penumbra address for account index 0.
+    pub fn relayer_address(&self) -> String {
+        use penumbra_sdk_keys::keys::AddressIndex;
+        let fvk = self.kms_config.spend_key.full_viewing_key();
+        let (address, _) = fvk.payment_address(AddressIndex::new(0));
+        address.to_string()
+    }
+}

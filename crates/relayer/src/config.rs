@@ -807,6 +807,16 @@ impl ChainConfig {
             Self::Penumbra(_) => false,
         }
     }
+
+    /// Returns the relayer account identifier for telemetry.
+    /// For Cosmos/Namada chains this requires keyring access.
+    /// For Penumbra, derives the address from the spend key.
+    pub fn relayer_account(&self) -> Option<String> {
+        match self {
+            Self::Penumbra(config) => Some(config.relayer_address()),
+            _ => None,
+        }
+    }
 }
 
 // /!\ Update me when adding a new chain type!
