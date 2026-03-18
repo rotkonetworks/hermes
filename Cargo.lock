@@ -4558,6 +4558,7 @@ dependencies = [
  "tokio-stream",
  "toml 0.8.23",
  "tonic",
+ "tower 0.5.3",
  "tracing",
  "tracing-subscriber 0.3.22",
  "uuid 1.20.0",

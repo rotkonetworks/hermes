@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod query;
+pub mod service;
 pub mod tx;
 pub mod util;
 pub mod version;
