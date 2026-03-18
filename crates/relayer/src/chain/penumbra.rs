@@ -94,7 +94,9 @@ use crate::chain::penumbra::service::layers::{
     HeightMetadataLayer, ProofDecodingLayer, ProofDecodingResponse, RetryLayer, RetryPolicy,
     TimeoutLayer, TracingLayer,
 };
-use crate::chain::penumbra::service::{IbcQuery, IbcQueryResponse, PenumbraGrpcQueryService};
+use crate::chain::penumbra::service::{
+    IbcQuery, IbcQueryResponse, PenumbraGrpcQueryService,
+};
 
 pub struct PenumbraChain {
     config: PenumbraConfig,
@@ -102,10 +104,6 @@ pub struct PenumbraChain {
 
     view_client: Mutex<ViewServiceClient<BoxGrpcService>>,
     custody_client: CustodyServiceClient<BoxGrpcService>,
-
-    ibc_client_grpc_client: IbcClientQueryClient<tonic::transport::Channel>,
-    ibc_connection_grpc_client: IbcConnectionQueryClient<tonic::transport::Channel>,
-    ibc_channel_grpc_client: IbcChannelQueryClient<tonic::transport::Channel>,
 
     /// Tower-composed IBC query service (Phase 3).
     /// Wraps PenumbraGrpcQueryService with tracing, proof-decoding, and height-metadata layers.
@@ -531,9 +529,9 @@ impl ChainEndpoint for PenumbraChain {
             .layer(TimeoutLayer::new(config.rpc_timeout))
             .layer(HeightMetadataLayer)
             .service(PenumbraGrpcQueryService::new(
-                ibc_client_grpc_client.clone(),
-                ibc_connection_grpc_client.clone(),
-                ibc_channel_grpc_client.clone(),
+                ibc_client_grpc_client,
+                ibc_connection_grpc_client,
+                ibc_channel_grpc_client,
             ));
         let query_service = Arc::new(Mutex::new(tower::util::BoxService::new(query_service)));
 
@@ -545,10 +543,6 @@ impl ChainEndpoint for PenumbraChain {
             tendermint_rpc_client: rpc_client,
             tendermint_light_client,
             tx_monitor_cmd: None,
-
-            ibc_client_grpc_client,
-            ibc_connection_grpc_client,
-            ibc_channel_grpc_client,
 
             query_service,
             unbonding_period,
@@ -796,36 +790,38 @@ impl ChainEndpoint for PenumbraChain {
         );
         crate::telemetry!(query, self.id(), "query_clients");
 
-        let mut client = self.ibc_client_grpc_client.clone();
+        let query = IbcQuery::ClientStates(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let request = tonic::Request::new(request.into());
-        let response = self
-            .rt
-            .block_on(client.client_states(request))
-            .map_err(|e| Error::grpc_status(e, "query_clients".to_owned()))?
-            .into_inner();
-
-        // Deserialize into domain type
-        let mut clients: Vec<IdentifiedAnyClientState> = response
-            .client_states
-            .into_iter()
-            .filter_map(|cs| {
-                IdentifiedAnyClientState::try_from(cs.clone())
-                    .map_err(|e| {
-                        tracing::warn!(
-                            "failed to parse client state {}. Error: {}",
-                            PrettyIdentifiedClientState(&cs),
-                            e
-                        )
+        match result.response {
+            IbcQueryResponse::ClientStates(response) => {
+                // Deserialize into domain type
+                let mut clients: Vec<IdentifiedAnyClientState> = response
+                    .client_states
+                    .into_iter()
+                    .filter_map(|cs| {
+                        IdentifiedAnyClientState::try_from(cs.clone())
+                            .map_err(|e| {
+                                tracing::warn!(
+                                    "failed to parse client state {}. Error: {}",
+                                    PrettyIdentifiedClientState(&cs),
+                                    e
+                                )
+                            })
+                            .ok()
                     })
-                    .ok()
-            })
-            .collect();
+                    .collect();
 
-        // Sort by client identifier counter
-        clients.sort_by_cached_key(|c| client_id_suffix(&c.client_id).unwrap_or(0));
+                // Sort by client identifier counter
+                clients.sort_by_cached_key(|c| client_id_suffix(&c.client_id).unwrap_or(0));
 
-        Ok(clients)
+                Ok(clients)
+            }
+            _ => unreachable!("query_clients: unexpected response variant"),
+        }
     }
 
     fn query_client_state(
@@ -894,25 +890,23 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         request: QueryConsensusStateHeightsRequest,
     ) -> Result<Vec<ibc_relayer_types::Height>, Error> {
-        let mut client = self.ibc_client_grpc_client.clone();
+        let query = IbcQuery::ConsensusStateHeights(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let req = ibc_proto::ibc::core::client::v1::QueryConsensusStateHeightsRequest {
-            client_id: request.client_id.to_string(),
-            pagination: Default::default(),
-        };
-
-        let response = self
-            .rt
-            .block_on(client.consensus_state_heights(req))
-            .map_err(|e| Error::grpc_status(e, "query_consensus_state_heights".to_owned()))?
-            .into_inner();
-
-        let heights = response
-            .consensus_state_heights
-            .into_iter()
-            .filter_map(|h| ICSHeight::new(h.revision_number, h.revision_height).ok())
-            .collect();
-        Ok(heights)
+        match result.response {
+            IbcQueryResponse::ConsensusStateHeights(response) => {
+                let heights = response
+                    .consensus_state_heights
+                    .into_iter()
+                    .filter_map(|h| ICSHeight::new(h.revision_number, h.revision_height).ok())
+                    .collect();
+                Ok(heights)
+            }
+            _ => unreachable!("query_consensus_state_heights: unexpected response variant"),
+        }
     }
 
     fn query_upgraded_client_state(
@@ -941,33 +935,34 @@ impl ChainEndpoint for PenumbraChain {
         );
         crate::telemetry!(query, self.id(), "query_connections");
 
-        let mut client = self.ibc_connection_grpc_client.clone();
+        let query = IbcQuery::Connections(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let request = tonic::Request::new(request.into());
-
-        let response = self
-            .rt
-            .block_on(client.connections(request))
-            .map_err(|e| Error::grpc_status(e, "query_connections".to_owned()))?
-            .into_inner();
-
-        let connections = response
-            .connections
-            .into_iter()
-            .filter_map(|co| {
-                IdentifiedConnectionEnd::try_from(co.clone())
-                    .map_err(|e| {
-                        tracing::warn!(
-                            "connection with ID {} failed parsing. Error: {}",
-                            PrettyIdentifiedConnection(&co),
-                            e
-                        )
+        match result.response {
+            IbcQueryResponse::Connections(response) => {
+                let connections = response
+                    .connections
+                    .into_iter()
+                    .filter_map(|co| {
+                        IdentifiedConnectionEnd::try_from(co.clone())
+                            .map_err(|e| {
+                                tracing::warn!(
+                                    "connection with ID {} failed parsing. Error: {}",
+                                    PrettyIdentifiedConnection(&co),
+                                    e
+                                )
+                            })
+                            .ok()
                     })
-                    .ok()
-            })
-            .collect();
+                    .collect();
 
-        Ok(connections)
+                Ok(connections)
+            }
+            _ => unreachable!("query_connections: unexpected response variant"),
+        }
     }
 
     fn query_client_connections(
@@ -1035,63 +1030,67 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         request: QueryConnectionChannelsRequest,
     ) -> Result<Vec<IdentifiedChannelEnd>, Error> {
-        let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let query = IbcQuery::ConnectionChannels(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let response = self
-            .rt
-            .block_on(client.connection_channels(request))
-            .map_err(|e| Error::grpc_status(e, "query_connection_channels".to_owned()))?
-            .into_inner();
-
-        let channels = response
-            .channels
-            .into_iter()
-            .filter_map(|ch| {
-                IdentifiedChannelEnd::try_from(ch.clone())
-                    .map_err(|e| {
-                        tracing::warn!(
-                            "channel with ID {} failed parsing. Error: {}",
-                            PrettyIdentifiedChannel(&ch),
-                            e
-                        )
+        match result.response {
+            IbcQueryResponse::ConnectionChannels(response) => {
+                let channels = response
+                    .channels
+                    .into_iter()
+                    .filter_map(|ch| {
+                        IdentifiedChannelEnd::try_from(ch.clone())
+                            .map_err(|e| {
+                                tracing::warn!(
+                                    "channel with ID {} failed parsing. Error: {}",
+                                    PrettyIdentifiedChannel(&ch),
+                                    e
+                                )
+                            })
+                            .ok()
                     })
-                    .ok()
-            })
-            .collect();
-        Ok(channels)
+                    .collect();
+                Ok(channels)
+            }
+            _ => unreachable!("query_connection_channels: unexpected response variant"),
+        }
     }
 
     fn query_channels(
         &self,
         request: QueryChannelsRequest,
     ) -> Result<Vec<IdentifiedChannelEnd>, Error> {
-        let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let query = IbcQuery::Channels(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let response = self
-            .rt
-            .block_on(client.channels(request))
-            .map_err(|e| Error::grpc_status(e, "query_channels".to_owned()))?
-            .into_inner();
-
-        let channels = response
-            .channels
-            .into_iter()
-            .filter_map(|ch| {
-                IdentifiedChannelEnd::try_from(ch.clone())
-                    .map_err(|e| {
-                        tracing::warn!(
-                            "channel with ID {} failed parsing. Error: {}",
-                            PrettyIdentifiedChannel(&ch),
-                            e
-                        );
+        match result.response {
+            IbcQueryResponse::Channels(response) => {
+                let channels = response
+                    .channels
+                    .into_iter()
+                    .filter_map(|ch| {
+                        IdentifiedChannelEnd::try_from(ch.clone())
+                            .map_err(|e| {
+                                tracing::warn!(
+                                    "channel with ID {} failed parsing. Error: {}",
+                                    PrettyIdentifiedChannel(&ch),
+                                    e
+                                );
+                            })
+                            .ok()
                     })
-                    .ok()
-            })
-            .collect();
+                    .collect();
 
-        Ok(channels)
+                Ok(channels)
+            }
+            _ => unreachable!("query_channels: unexpected response variant"),
+        }
     }
 
     /// identifier. A proof can optionally be returned along with the result.
@@ -1124,20 +1123,22 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         request: QueryChannelClientStateRequest,
     ) -> Result<Option<IdentifiedAnyClientState>, Error> {
-        let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let query = IbcQuery::ChannelClientState(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let response = self
-            .rt
-            .block_on(client.channel_client_state(request))
-            .map_err(|e| Error::grpc_status(e, "query_channel_client_state".to_owned()))?
-            .into_inner();
+        match result.response {
+            IbcQueryResponse::ChannelClientState(response) => {
+                let client_state: Option<IdentifiedAnyClientState> = response
+                    .identified_client_state
+                    .map_or_else(|| None, |proto_cs| proto_cs.try_into().ok());
 
-        let client_state: Option<IdentifiedAnyClientState> = response
-            .identified_client_state
-            .map_or_else(|| None, |proto_cs| proto_cs.try_into().ok());
-
-        Ok(client_state)
+                Ok(client_state)
+            }
+            _ => unreachable!("query_channel_client_state: unexpected response variant"),
+        }
     }
 
     fn query_packet_commitment(
@@ -1162,28 +1163,30 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         request: QueryPacketCommitmentsRequest,
     ) -> Result<(Vec<Sequence>, ibc_relayer_types::Height), Error> {
-        let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let query = IbcQuery::PacketCommitments(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let response = self
-            .rt
-            .block_on(client.packet_commitments(request))
-            .map_err(|e| Error::grpc_status(e, "query_packet_commitments".to_owned()))?
-            .into_inner();
+        match result.response {
+            IbcQueryResponse::PacketCommitments(response) => {
+                let mut commitment_sequences: Vec<Sequence> = response
+                    .commitments
+                    .into_iter()
+                    .map(|v| v.sequence.into())
+                    .collect();
+                commitment_sequences.sort_unstable();
 
-        let mut commitment_sequences: Vec<Sequence> = response
-            .commitments
-            .into_iter()
-            .map(|v| v.sequence.into())
-            .collect();
-        commitment_sequences.sort_unstable();
+                let height = response
+                    .height
+                    .and_then(|raw_height| raw_height.try_into().ok())
+                    .ok_or_else(|| Error::grpc_response_param("height".to_string()))?;
 
-        let height = response
-            .height
-            .and_then(|raw_height| raw_height.try_into().ok())
-            .ok_or_else(|| Error::grpc_response_param("height".to_string()))?;
-
-        Ok((commitment_sequences, height))
+                Ok((commitment_sequences, height))
+            }
+            _ => unreachable!("query_packet_commitments: unexpected response variant"),
+        }
     }
 
     fn query_packet_receipt(
@@ -1211,22 +1214,23 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         request: QueryUnreceivedPacketsRequest,
     ) -> Result<Vec<Sequence>, Error> {
-        let mut client = self.ibc_channel_grpc_client.clone();
+        let query = IbcQuery::UnreceivedPackets(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let request = tonic::Request::new(request.into());
-
-        let mut response = self
-            .rt
-            .block_on(client.unreceived_packets(request))
-            .map_err(|e| Error::grpc_status(e, "query_unreceived_packets".to_owned()))?
-            .into_inner();
-
-        response.sequences.sort_unstable();
-        Ok(response
-            .sequences
-            .into_iter()
-            .map(|seq| seq.into())
-            .collect())
+        match result.response {
+            IbcQueryResponse::UnreceivedPackets(mut response) => {
+                response.sequences.sort_unstable();
+                Ok(response
+                    .sequences
+                    .into_iter()
+                    .map(|seq| seq.into())
+                    .collect())
+            }
+            _ => unreachable!("query_unreceived_packets: unexpected response variant"),
+        }
     }
 
     fn query_packet_acknowledgement(
@@ -1254,48 +1258,52 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         request: QueryPacketAcknowledgementsRequest,
     ) -> Result<(Vec<Sequence>, ibc_relayer_types::Height), Error> {
-        let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let query = IbcQuery::PacketAcknowledgements(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let response = self
-            .rt
-            .block_on(client.packet_acknowledgements(request))
-            .map_err(|e| Error::grpc_status(e, "query_packet_acknowledgements".to_owned()))?
-            .into_inner();
+        match result.response {
+            IbcQueryResponse::PacketAcknowledgements(response) => {
+                let acks_sequences = response
+                    .acknowledgements
+                    .into_iter()
+                    .map(|v| v.sequence.into())
+                    .collect();
 
-        let acks_sequences = response
-            .acknowledgements
-            .into_iter()
-            .map(|v| v.sequence.into())
-            .collect();
+                let height = response
+                    .height
+                    .and_then(|raw_height| raw_height.try_into().ok())
+                    .ok_or_else(|| Error::grpc_response_param("height".to_string()))?;
 
-        let height = response
-            .height
-            .and_then(|raw_height| raw_height.try_into().ok())
-            .ok_or_else(|| Error::grpc_response_param("height".to_string()))?;
-
-        Ok((acks_sequences, height))
+                Ok((acks_sequences, height))
+            }
+            _ => unreachable!("query_packet_acknowledgements: unexpected response variant"),
+        }
     }
 
     fn query_unreceived_acknowledgements(
         &self,
         request: QueryUnreceivedAcksRequest,
     ) -> Result<Vec<Sequence>, Error> {
-        let mut client = self.ibc_channel_grpc_client.clone();
-        let request = tonic::Request::new(request.into());
+        let query = IbcQuery::UnreceivedAcks(request);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let mut response = self
-            .rt
-            .block_on(client.unreceived_acks(request))
-            .map_err(|e| Error::grpc_status(e, "query_unreceived_acknowledgements".to_owned()))?
-            .into_inner();
-
-        response.sequences.sort_unstable();
-        Ok(response
-            .sequences
-            .into_iter()
-            .map(|seq| seq.into())
-            .collect())
+        match result.response {
+            IbcQueryResponse::UnreceivedAcks(mut response) => {
+                response.sequences.sort_unstable();
+                Ok(response
+                    .sequences
+                    .into_iter()
+                    .map(|seq| seq.into())
+                    .collect())
+            }
+            _ => unreachable!("query_unreceived_acknowledgements: unexpected response variant"),
+        }
     }
 
     fn query_next_sequence_receive(
