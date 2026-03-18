@@ -6,8 +6,7 @@ pub mod tx;
 pub mod util;
 pub mod version;
 
-use anyhow::Context;
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::StreamExt;
 use http::Uri;
 use ibc_proto::ics23;
 use ibc_relayer_types::applications::ics28_ccv::msgs::ConsumerChain;
@@ -15,22 +14,17 @@ use ibc_relayer_types::core::ics02_client;
 use ibc_relayer_types::core::ics04_channel;
 use pbjson_types;
 
-
 use ibc_relayer_types::core::ics04_channel::packet::PacketMsgType;
 use ibc_relayer_types::core::ics24_host::identifier::{ChannelId, PortId};
 use ibc_relayer_types::proofs::Proofs;
 use once_cell::sync::Lazy;
 use penumbra_sdk_proto::core::app::v1::AppParametersRequest;
-use penumbra_sdk_proto::core::component::ibc::v1::IbcRelay as ProtoIbcRelay;
-use penumbra_sdk_proto::DomainType as _;
 use penumbra_sdk_transaction::txhash::TransactionId;
-use penumbra_sdk_transaction::Transaction;
 use std::cmp::Ordering;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tracing::info;
 
 use crate::chain::client::ClientSettings;
 use crate::chain::endpoint::ChainStatus;
@@ -63,8 +57,6 @@ use ibc_relayer_types::core::ics04_channel::packet::Sequence;
 use ibc_relayer_types::core::ics23_commitment::merkle::MerkleProof;
 use ibc_relayer_types::core::ics24_host::identifier::{ChainId, ClientId};
 use ibc_relayer_types::Height as ICSHeight;
-use penumbra_sdk_fee::FeeTier;
-use penumbra_sdk_ibc::IbcRelay;
 use penumbra_sdk_keys::keys::AddressIndex;
 use penumbra_sdk_proto::box_grpc_svc::{self, BoxGrpcService};
 use penumbra_sdk_proto::{
@@ -73,14 +65,10 @@ use penumbra_sdk_proto::{
         custody_service_client::CustodyServiceClient, custody_service_server::CustodyServiceServer,
     },
     view::v1::{
-        broadcast_transaction_response::Status as BroadcastStatus,
         view_service_client::ViewServiceClient, view_service_server::ViewServiceServer,
-        GasPricesRequest,
     },
 };
 use penumbra_sdk_view::{ViewClient, ViewServer};
-use penumbra_sdk_wallet::plan::Planner;
-use signature::rand_core::OsRng;
 
 use tendermint::time::Time as TmTime;
 use tendermint_light_client::verifier::types::LightBlock as TmLightBlock;
@@ -308,46 +296,14 @@ impl PenumbraChain {
     async fn build_penumbra_tx(
         &mut self,
         tracked_msgs: TrackedMsgs,
-    ) -> Result<penumbra_sdk_transaction::Transaction, anyhow::Error> {
+    ) -> Result<penumbra_sdk_transaction::Transaction, error::PenumbraError> {
         let mut view_client = self.view_client.lock().await.clone();
-        let gas_prices = view_client
-            .gas_prices(GasPricesRequest {})
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to query gas prices: {}", e))?
-            .into_inner()
-            .gas_prices
-            .ok_or_else(|| anyhow::anyhow!("gas prices not available from view service"))?
-            .try_into()
-            .map_err(|e: anyhow::Error| anyhow::anyhow!("failed to parse gas prices: {}", e))?;
-        // TODO: should this be a config option?
-        let fee_tier = FeeTier::default();
-
-        // use the transaction builder in the custody service to construct a transaction, including
-        // each tracked message as an IbcRelay message
-        let mut planner = Planner::new(OsRng);
-
-        planner.set_gas_prices(gas_prices).set_fee_tier(fee_tier);
-
-        for msg in tracked_msgs.msgs {
-            let raw_ibcrelay_msg = ProtoIbcRelay {
-                raw_action: Some(pbjson_types::Any {
-                    type_url: msg.type_url.clone(),
-                    value: msg.value.clone().into(),
-                }),
-            };
-            let ibc_action =
-                IbcRelay::try_from(raw_ibcrelay_msg)
-                    .map_err(|e| anyhow::anyhow!("failed to convert to IbcRelay: {}", e))?;
-            planner.ibc_action(ibc_action);
-        }
-
-        let plan = planner.plan(&mut view_client, AddressIndex::new(0)).await?;
-
-        penumbra_sdk_wallet::build_transaction(
-            self.config.kms_config.spend_key.full_viewing_key(),
+        let fvk = self.config.kms_config.spend_key.full_viewing_key().clone();
+        tx::build_penumbra_tx(
             &mut view_client,
             &mut self.custody_client,
-            plan,
+            &fvk,
+            tracked_msgs,
         )
         .await
     }
@@ -357,19 +313,19 @@ impl PenumbraChain {
         tracked_msgs: TrackedMsgs,
         wait_for_commit: bool,
     ) -> Result<penumbra_sdk_transaction::txhash::TransactionId, Error> {
-        let view_client = self.view_client.lock().await.clone();
         let tx = self.build_penumbra_tx(tracked_msgs).await.map_err(|e| {
             tracing::error!("error building penumbra transaction: {}", e);
-            Error::temp_penumbra_error(e.to_string())
+            Error::from(e)
         })?;
 
-        let penumbra_txid = self
-            .submit_transaction(tx, wait_for_commit, &mut view_client.clone())
-            .await
-            .map_err(|e| {
-                tracing::error!("error submitting transaction: {}", e);
-                Error::temp_penumbra_error(e.to_string())
-            })?;
+        let mut view_client = self.view_client.lock().await.clone();
+        let penumbra_txid =
+            tx::submit_transaction(&mut view_client, tx, wait_for_commit)
+                .await
+                .map_err(|e| {
+                    tracing::error!("error submitting transaction: {}", e);
+                    Error::from(e)
+                })?;
 
         // wait for two blocks of confirmation to be sure that the potentially load-balanced endpoints are synced
         if wait_for_commit {
@@ -397,55 +353,6 @@ impl PenumbraChain {
         }
 
         Ok(penumbra_txid)
-    }
-
-    async fn submit_transaction(
-        &mut self,
-        transaction: Transaction,
-        wait_for_commit: bool,
-        view_client: &mut ViewServiceClient<BoxGrpcService>,
-    ) -> anyhow::Result<TransactionId> {
-        info!("broadcasting penumbra transaction and awaiting confirmation...");
-        let mut rsp =
-            ViewClient::broadcast_transaction(view_client, transaction, wait_for_commit).await?;
-
-        let id = (async move {
-            while let Some(rsp) = rsp.try_next().await? {
-                match rsp.status {
-                    Some(status) => match status {
-                        BroadcastStatus::BroadcastSuccess(bs) => {
-                            if !wait_for_commit {
-                                return bs.id.expect("detected transaction missing id").try_into();
-                            }
-                        }
-                        BroadcastStatus::Confirmed(c) => {
-                            let id = c.id.expect("detected transaction missing id").try_into()?;
-                            info!(id = %id, "penumbra transaction confirmed");
-                            return Ok(id);
-                        }
-                    },
-                    None => {
-                        // No status is unexpected behavior
-                        return Err(anyhow::anyhow!(
-                            "empty BroadcastTransactionResponse message"
-                        ));
-                    }
-                }
-            }
-
-            Err(anyhow::anyhow!(
-                "should have received BroadcastTransaction status or error"
-            ))
-        }
-        .boxed())
-        .await
-        .map_err(|e| {
-            tracing::error!("error awaiting transaction broadcast: {}", e);
-            e
-        })
-        .context("broadcast_transaction failed")?;
-
-        Ok(id)
     }
 
     async fn query_balance(
