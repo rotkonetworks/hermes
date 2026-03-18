@@ -98,6 +98,7 @@ use tendermint_rpc::{Client as _, HttpClient};
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::sync::Mutex;
 use tonic::IntoRequest;
+use tower::{Service, ServiceExt};
 
 use std::path::PathBuf;
 
@@ -112,6 +113,8 @@ use crate::{
 };
 
 use crate::chain::penumbra::config::PenumbraConfig;
+use crate::chain::penumbra::service::layers::{ProofDecodingLayer, ProofDecodingResponse, TracingLayer, HeightMetadataLayer};
+use crate::chain::penumbra::service::{IbcQuery, IbcQueryResponse, PenumbraGrpcQueryService};
 
 pub struct PenumbraChain {
     config: PenumbraConfig,
@@ -123,6 +126,11 @@ pub struct PenumbraChain {
     ibc_client_grpc_client: IbcClientQueryClient<tonic::transport::Channel>,
     ibc_connection_grpc_client: IbcConnectionQueryClient<tonic::transport::Channel>,
     ibc_channel_grpc_client: IbcChannelQueryClient<tonic::transport::Channel>,
+
+    /// Tower-composed IBC query service (Phase 3).
+    /// Wraps PenumbraGrpcQueryService with tracing, proof-decoding, and height-metadata layers.
+    /// Behind Arc<Mutex<_>> because tower::Service::call takes &mut self.
+    query_service: Arc<Mutex<tower::util::BoxService<IbcQuery, ProofDecodingResponse, Error>>>,
 
     tendermint_rpc_client: HttpClient,
     tendermint_light_client: TmLightClient,
@@ -614,6 +622,19 @@ impl ChainEndpoint for PenumbraChain {
 
         tracing::info!("ibc grpc query clients connected");
 
+        // Build the tower-composed query service stack (Phase 3).
+        // Layer order (outermost first): ProofDecoding -> Tracing -> HeightMetadata -> Grpc
+        let query_service = tower::ServiceBuilder::new()
+            .layer(ProofDecodingLayer)
+            .layer(TracingLayer::new(config.id.to_string()))
+            .layer(HeightMetadataLayer)
+            .service(PenumbraGrpcQueryService::new(
+                ibc_client_grpc_client.clone(),
+                ibc_connection_grpc_client.clone(),
+                ibc_channel_grpc_client.clone(),
+            ));
+        let query_service = Arc::new(Mutex::new(tower::util::BoxService::new(query_service)));
+
         Ok(Self {
             config,
             rt,
@@ -627,6 +648,7 @@ impl ChainEndpoint for PenumbraChain {
             ibc_connection_grpc_client,
             ibc_channel_grpc_client,
 
+            query_service,
             unbonding_period,
         })
     }
@@ -1257,25 +1279,17 @@ impl ChainEndpoint for PenumbraChain {
         req: QueryPacketCommitmentRequest,
         include_proof: IncludeProof,
     ) -> Result<(Vec<u8>, Option<MerkleProof>), Error> {
-        crate::telemetry!(query, self.id(), "query_packet_commitment");
-        let mut client = self.ibc_channel_grpc_client.clone();
+        let query = IbcQuery::PacketCommitment(req, include_proof);
 
-        let proto_request: RawQueryPacketCommitmentRequest = req.clone().into();
-        let mut request = proto_request.into_request();
-        query::set_height_metadata(&mut request, &req.height);
+        let result = self.rt.block_on(async {
+            let mut svc = self.query_service.lock().await;
+            svc.ready().await?.call(query).await
+        })?;
 
-        let response = self
-            .rt
-            .block_on(client.packet_commitment(request))
-            .map_err(|e| Error::grpc_status(e, "query_packet_commitment".to_owned()))?
-            .into_inner();
-
-        let proof = match include_proof {
-            IncludeProof::No => None,
-            IncludeProof::Yes => Some(query::decode_proof(response.proof, "query_packet_commitment")?),
-        };
-
-        Ok((response.commitment, proof))
+        match result.response {
+            IbcQueryResponse::PacketCommitment(resp) => Ok((resp.commitment, result.proof)),
+            _ => unreachable!("query_packet_commitment: unexpected response variant"),
+        }
     }
 
     fn query_packet_commitments(
