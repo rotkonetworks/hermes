@@ -32,4 +32,4 @@ mc.log
 tools/check-guide/Cargo.lock
 
 # Ignore data generated from wasm contract
-ibc_08-wasm_client_data
+ibc_08-wasm_client_data.claude/worktrees/
