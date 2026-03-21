@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use std::panic::{self, AssertUnwindSafe};
 use std::thread;
 
 use crossbeam_channel as channel;
@@ -135,6 +136,8 @@ where
     }
 
     fn run(mut self) -> Result<(), Error> {
+        let chain_id = ChainEndpoint::id(&self.chain).to_string();
+
         loop {
             channel::select! {
                 recv(self.request_receiver) -> event => {
@@ -148,233 +151,278 @@ where
 
                     let _span = span.entered();
 
-                    match event {
-                        ChainRequest::Shutdown { reply_to } => {
-                            let res = self.chain.shutdown();
+                    // Handle shutdown outside catch_unwind since it needs to break the loop.
+                    if let ChainRequest::Shutdown { reply_to } = event {
+                        let res = self.chain.shutdown();
+                        reply_to.send(res).map_err(Error::send)?;
+                        break;
+                    }
 
-                            reply_to.send(res)
-                                .map_err(Error::send)?;
+                    // Wrap the entire dispatch in catch_unwind so that a panic in any
+                    // ChainEndpoint method does not kill the runtime thread. Without this,
+                    // a single .unwrap() or .expect() failure in a handler permanently
+                    // breaks ALL relaying on this chain (the crossbeam channel receiver
+                    // drops, causing "internal message-passing failure" on every subsequent
+                    // request from every worker).
+                    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                        self.dispatch(event)
+                    }));
 
-                            break;
+                    match result {
+                        Ok(Ok(())) => {},
+                        Ok(Err(e)) => {
+                            error!("[{}] chain runtime dispatch error: {}", chain_id, e);
+                            // The handler already sent an error reply via reply_to (or
+                            // the reply_to receiver was dropped). Either way, continue
+                            // processing the next request.
                         },
-
-                        ChainRequest::HealthCheck { reply_to } => {
-                            self.health_check(reply_to)?
-                        },
-
-                        ChainRequest::Subscribe { reply_to } => {
-                            self.subscribe(reply_to)?
-                        },
-
-                        ChainRequest::SendMessagesAndWaitCommit { tracked_msgs, reply_to } => {
-                            self.send_messages_and_wait_commit(tracked_msgs, reply_to)?
-                        },
-
-                        ChainRequest::SendMessagesAndWaitCheckTx { tracked_msgs, reply_to } => {
-                            self.send_messages_and_wait_check_tx(tracked_msgs, reply_to)?
-                        },
-
-                        ChainRequest::Signer { reply_to } => {
-                            self.get_signer(reply_to)?
-                        },
-
-                        ChainRequest::Config { reply_to } => {
-                            self.get_config(reply_to)?
-                        },
-
-                        ChainRequest::GetKey { reply_to } => {
-                            self.get_key(reply_to)?
-                        },
-
-                        ChainRequest::AddKey { key_name, key, reply_to } => {
-                            self.add_key(key_name, key, reply_to)?
-                        },
-
-                        ChainRequest::VersionSpecs { reply_to } => {
-                            self.version_specs(reply_to)?
-                        },
-
-                        ChainRequest::BuildHeader { trusted_height, target_height, client_state, reply_to } => {
-                            self.build_header(trusted_height, target_height, client_state, reply_to)?
-                        },
-
-                        ChainRequest::BuildClientState { height, settings, reply_to } => {
-                            self.build_client_state(height, settings, reply_to)?
-                        },
-
-                        ChainRequest::BuildConsensusState { trusted, target, client_state, reply_to } => {
-                            self.build_consensus_state(trusted, target, client_state, reply_to)?
-                        },
-
-                        ChainRequest::BuildMisbehaviour { client_state, update_event, reply_to } => {
-                            self.check_misbehaviour(update_event, client_state, reply_to)?
-                        },
-
-                        ChainRequest::BuildConnectionProofsAndClientState { message_type, connection_id, client_id, height, reply_to } => {
-                            self.build_connection_proofs_and_client_state(message_type, connection_id, client_id, height, reply_to)?
-                        },
-
-                        ChainRequest::BuildChannelProofs { port_id, channel_id, height, reply_to } => {
-                            self.build_channel_proofs(port_id, channel_id, height, reply_to)?
-                        },
-
-                        ChainRequest::QueryBalance { key_name, denom, reply_to } => {
-                            self.query_balance(key_name, denom, reply_to)?
-                        },
-
-                        ChainRequest::QueryAllBalances { key_name, reply_to } => {
-                            self.query_all_balances(key_name, reply_to)?
-                        },
-
-                        ChainRequest::QueryDenomTrace { hash, reply_to } => {
-                            self.query_denom_trace(hash, reply_to)?
-                        },
-
-                        ChainRequest::QueryApplicationStatus { reply_to } => {
-                            self.query_application_status(reply_to)?
-                        },
-
-                        ChainRequest::QueryClients { request, reply_to } => {
-                            self.query_clients(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryClientConnections { request, reply_to } => {
-                            self.query_client_connections(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryClientState { request, include_proof, reply_to } => {
-                            self.query_client_state(request, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryConsensusStateHeights { request, reply_to } => {
-                            self.query_consensus_state_heights(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryConsensusState { request, include_proof, reply_to } => {
-                            self.query_consensus_state(request, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryUpgradedClientState { request, reply_to } => {
-                            self.query_upgraded_client_state(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryUpgradedConsensusState { request, reply_to } => {
-                            self.query_upgraded_consensus_state(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryCommitmentPrefix { reply_to } => {
-                            self.query_commitment_prefix(reply_to)?
-                        },
-
-                        ChainRequest::QueryCompatibleVersions { reply_to } => {
-                            self.query_compatible_versions(reply_to)?
-                        },
-
-                        ChainRequest::QueryConnection { request, include_proof, reply_to } => {
-                            self.query_connection(request, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryConnections { request, reply_to } => {
-                            self.query_connections(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryConnectionChannels { request, reply_to } => {
-                            self.query_connection_channels(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryChannels { request, reply_to } => {
-                            self.query_channels(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryChannel { request, include_proof, reply_to } => {
-                            self.query_channel(request, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryChannelClientState { request, reply_to } => {
-                            self.query_channel_client_state(request, reply_to)?
-                        },
-
-                        ChainRequest::BuildPacketProofs { packet_type, port_id, channel_id, sequence, height, reply_to } => {
-                            self.build_packet_proofs(packet_type, port_id, channel_id, sequence, height, reply_to)?
-                        },
-
-                        ChainRequest::QueryPacketCommitment { request, include_proof, reply_to } => {
-                            self.query_packet_commitment(request, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryPacketCommitments { request, reply_to } => {
-                            self.query_packet_commitments(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryPacketReceipt { request, include_proof, reply_to } => {
-                            self.query_packet_receipt(request, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryUnreceivedPackets { request, reply_to } => {
-                            self.query_unreceived_packets(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryPacketAcknowledgement { request, include_proof, reply_to } => {
-                            self.query_packet_acknowledgement(request, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryPacketAcknowledgements { request, reply_to } => {
-                            self.query_packet_acknowledgements(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryUnreceivedAcknowledgement { request, reply_to } => {
-                            self.query_unreceived_acknowledgement(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryNextSequenceReceive { request, include_proof, reply_to } => {
-                            self.query_next_sequence_receive(request, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryPacketEventDataFromTxs { request, reply_to } => {
-                            self.query_txs(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryPacketEventData { request, reply_to } => {
-                            self.query_packet_events(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryHostConsensusState { request, reply_to } => {
-                            self.query_host_consensus_state(request, reply_to)?
-                        },
-
-                        ChainRequest::MaybeRegisterCounterpartyPayee { channel_id, port_id, counterparty_payee, reply_to } => {
-                            self.maybe_register_counterparty_payee(&channel_id, &port_id, &counterparty_payee, reply_to)?
-                        },
-
-                        ChainRequest::CrossChainQuery { request, reply_to } => {
-                            self.cross_chain_query(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryIncentivizedPacket { request, reply_to } => {
-                            self.query_incentivized_packet(request, reply_to)?
-                        },
-
-                        ChainRequest::QueryConsumerChains { reply_to } => {
-                            self.query_consumer_chains(reply_to)?
-                        },
-
-                        ChainRequest::QueryUpgrade { request, height, include_proof, reply_to } => {
-                            self.query_upgrade(request, height, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryUpgradeError { request, height, include_proof, reply_to } => {
-                            self.query_upgrade_error(request, height, include_proof, reply_to)?
-                        },
-
-                        ChainRequest::QueryConsumerId { client_id, reply_to } => {
-                            self.query_ccv_consumer_id(client_id, reply_to)?
-                        },
+                        Err(panic_info) => {
+                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "unknown panic".to_string()
+                            };
+                            error!(
+                                "[{}] chain runtime handler panicked, recovering: {}",
+                                chain_id, msg
+                            );
+                            // The reply_to channel for this request will be dropped
+                            // (it was moved into the panicking handler), so the caller
+                            // will get a RecvError. But critically, the runtime thread
+                            // survives and continues processing future requests.
+                        }
                     }
                 },
             }
         }
 
         Ok(())
+    }
+
+    /// Dispatch a single chain request to the appropriate handler.
+    ///
+    /// Extracted from `run()` so that the entire dispatch can be wrapped in
+    /// `catch_unwind` — a panic in any handler is caught and logged instead
+    /// of killing the runtime thread.
+    fn dispatch(&mut self, event: ChainRequest) -> Result<(), Error> {
+        match event {
+            // Shutdown is handled in run() before dispatch is called.
+            ChainRequest::Shutdown { .. } => Ok(()),
+
+            ChainRequest::HealthCheck { reply_to } => {
+                self.health_check(reply_to)
+            },
+
+            ChainRequest::Subscribe { reply_to } => {
+                self.subscribe(reply_to)
+            },
+
+            ChainRequest::SendMessagesAndWaitCommit { tracked_msgs, reply_to } => {
+                self.send_messages_and_wait_commit(tracked_msgs, reply_to)
+            },
+
+            ChainRequest::SendMessagesAndWaitCheckTx { tracked_msgs, reply_to } => {
+                self.send_messages_and_wait_check_tx(tracked_msgs, reply_to)
+            },
+
+            ChainRequest::Signer { reply_to } => {
+                self.get_signer(reply_to)
+            },
+
+            ChainRequest::Config { reply_to } => {
+                self.get_config(reply_to)
+            },
+
+            ChainRequest::GetKey { reply_to } => {
+                self.get_key(reply_to)
+            },
+
+            ChainRequest::AddKey { key_name, key, reply_to } => {
+                self.add_key(key_name, key, reply_to)
+            },
+
+            ChainRequest::VersionSpecs { reply_to } => {
+                self.version_specs(reply_to)
+            },
+
+            ChainRequest::BuildHeader { trusted_height, target_height, client_state, reply_to } => {
+                self.build_header(trusted_height, target_height, client_state, reply_to)
+            },
+
+            ChainRequest::BuildClientState { height, settings, reply_to } => {
+                self.build_client_state(height, settings, reply_to)
+            },
+
+            ChainRequest::BuildConsensusState { trusted, target, client_state, reply_to } => {
+                self.build_consensus_state(trusted, target, client_state, reply_to)
+            },
+
+            ChainRequest::BuildMisbehaviour { client_state, update_event, reply_to } => {
+                self.check_misbehaviour(update_event, client_state, reply_to)
+            },
+
+            ChainRequest::BuildConnectionProofsAndClientState { message_type, connection_id, client_id, height, reply_to } => {
+                self.build_connection_proofs_and_client_state(message_type, connection_id, client_id, height, reply_to)
+            },
+
+            ChainRequest::BuildChannelProofs { port_id, channel_id, height, reply_to } => {
+                self.build_channel_proofs(port_id, channel_id, height, reply_to)
+            },
+
+            ChainRequest::QueryBalance { key_name, denom, reply_to } => {
+                self.query_balance(key_name, denom, reply_to)
+            },
+
+            ChainRequest::QueryAllBalances { key_name, reply_to } => {
+                self.query_all_balances(key_name, reply_to)
+            },
+
+            ChainRequest::QueryDenomTrace { hash, reply_to } => {
+                self.query_denom_trace(hash, reply_to)
+            },
+
+            ChainRequest::QueryApplicationStatus { reply_to } => {
+                self.query_application_status(reply_to)
+            },
+
+            ChainRequest::QueryClients { request, reply_to } => {
+                self.query_clients(request, reply_to)
+            },
+
+            ChainRequest::QueryClientConnections { request, reply_to } => {
+                self.query_client_connections(request, reply_to)
+            },
+
+            ChainRequest::QueryClientState { request, include_proof, reply_to } => {
+                self.query_client_state(request, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryConsensusStateHeights { request, reply_to } => {
+                self.query_consensus_state_heights(request, reply_to)
+            },
+
+            ChainRequest::QueryConsensusState { request, include_proof, reply_to } => {
+                self.query_consensus_state(request, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryUpgradedClientState { request, reply_to } => {
+                self.query_upgraded_client_state(request, reply_to)
+            },
+
+            ChainRequest::QueryUpgradedConsensusState { request, reply_to } => {
+                self.query_upgraded_consensus_state(request, reply_to)
+            },
+
+            ChainRequest::QueryCommitmentPrefix { reply_to } => {
+                self.query_commitment_prefix(reply_to)
+            },
+
+            ChainRequest::QueryCompatibleVersions { reply_to } => {
+                self.query_compatible_versions(reply_to)
+            },
+
+            ChainRequest::QueryConnection { request, include_proof, reply_to } => {
+                self.query_connection(request, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryConnections { request, reply_to } => {
+                self.query_connections(request, reply_to)
+            },
+
+            ChainRequest::QueryConnectionChannels { request, reply_to } => {
+                self.query_connection_channels(request, reply_to)
+            },
+
+            ChainRequest::QueryChannels { request, reply_to } => {
+                self.query_channels(request, reply_to)
+            },
+
+            ChainRequest::QueryChannel { request, include_proof, reply_to } => {
+                self.query_channel(request, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryChannelClientState { request, reply_to } => {
+                self.query_channel_client_state(request, reply_to)
+            },
+
+            ChainRequest::BuildPacketProofs { packet_type, port_id, channel_id, sequence, height, reply_to } => {
+                self.build_packet_proofs(packet_type, port_id, channel_id, sequence, height, reply_to)
+            },
+
+            ChainRequest::QueryPacketCommitment { request, include_proof, reply_to } => {
+                self.query_packet_commitment(request, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryPacketCommitments { request, reply_to } => {
+                self.query_packet_commitments(request, reply_to)
+            },
+
+            ChainRequest::QueryPacketReceipt { request, include_proof, reply_to } => {
+                self.query_packet_receipt(request, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryUnreceivedPackets { request, reply_to } => {
+                self.query_unreceived_packets(request, reply_to)
+            },
+
+            ChainRequest::QueryPacketAcknowledgement { request, include_proof, reply_to } => {
+                self.query_packet_acknowledgement(request, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryPacketAcknowledgements { request, reply_to } => {
+                self.query_packet_acknowledgements(request, reply_to)
+            },
+
+            ChainRequest::QueryUnreceivedAcknowledgement { request, reply_to } => {
+                self.query_unreceived_acknowledgement(request, reply_to)
+            },
+
+            ChainRequest::QueryNextSequenceReceive { request, include_proof, reply_to } => {
+                self.query_next_sequence_receive(request, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryPacketEventDataFromTxs { request, reply_to } => {
+                self.query_txs(request, reply_to)
+            },
+
+            ChainRequest::QueryPacketEventData { request, reply_to } => {
+                self.query_packet_events(request, reply_to)
+            },
+
+            ChainRequest::QueryHostConsensusState { request, reply_to } => {
+                self.query_host_consensus_state(request, reply_to)
+            },
+
+            ChainRequest::MaybeRegisterCounterpartyPayee { channel_id, port_id, counterparty_payee, reply_to } => {
+                self.maybe_register_counterparty_payee(&channel_id, &port_id, &counterparty_payee, reply_to)
+            },
+
+            ChainRequest::CrossChainQuery { request, reply_to } => {
+                self.cross_chain_query(request, reply_to)
+            },
+
+            ChainRequest::QueryIncentivizedPacket { request, reply_to } => {
+                self.query_incentivized_packet(request, reply_to)
+            },
+
+            ChainRequest::QueryConsumerChains { reply_to } => {
+                self.query_consumer_chains(reply_to)
+            },
+
+            ChainRequest::QueryUpgrade { request, height, include_proof, reply_to } => {
+                self.query_upgrade(request, height, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryUpgradeError { request, height, include_proof, reply_to } => {
+                self.query_upgrade_error(request, height, include_proof, reply_to)
+            },
+
+            ChainRequest::QueryConsumerId { client_id, reply_to } => {
+                self.query_ccv_consumer_id(client_id, reply_to)
+            },
+        }
     }
 
     fn health_check(&mut self, reply_to: ReplyTo<HealthCheck>) -> Result<(), Error> {

@@ -376,7 +376,14 @@ where
             for attempt in 0..=policy.max_retries {
                 // On retries we need to wait before calling again.
                 if attempt > 0 {
-                    let err_ref = last_err.as_ref().expect("last_err set on retry");
+                    // Safety: last_err is always Some when attempt > 0 (set on previous iteration).
+                    let err_ref = match last_err.as_ref() {
+                        Some(e) => e,
+                        None => {
+                            tracing::error!("retry loop invariant violated: last_err is None on attempt {}", attempt);
+                            return Err(Error::temp_penumbra_error("retry loop invariant violated".to_string()));
+                        }
+                    };
                     tracing::warn!(
                         query = req.name(),
                         attempt = attempt,
@@ -401,8 +408,10 @@ where
                 }
             }
 
-            // Unreachable: the loop always returns.
-            Err(last_err.unwrap())
+            // Unreachable: the loop always returns on the final iteration.
+            Err(last_err.unwrap_or_else(|| {
+                Error::temp_penumbra_error("retry loop completed without result".to_string())
+            }))
         })
     }
 }

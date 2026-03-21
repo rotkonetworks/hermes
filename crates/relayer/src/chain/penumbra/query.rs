@@ -30,7 +30,8 @@ pub fn set_height_metadata<T>(request: &mut tonic::Request<T>, height: &QueryHei
     let height_str = format_height(height);
     request
         .metadata_mut()
-        .insert("height", height_str.parse().expect("valid ASCII height string"));
+        // Infallible: numeric strings are always valid ASCII HeaderValues.
+        .insert("height", height_str.parse().expect("numeric height is valid ASCII"));
 }
 
 /// Decodes raw proof bytes from a gRPC response into a `MerkleProof`.

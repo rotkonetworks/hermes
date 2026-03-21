@@ -106,12 +106,14 @@ pub async fn submit_transaction(
                         if !await_commit {
                             return bs
                                 .id
-                                .expect("detected transaction missing id")
+                                .ok_or_else(|| anyhow::anyhow!("BroadcastSuccess response missing transaction id"))?
                                 .try_into();
                         }
                     }
                     BroadcastStatus::Confirmed(c) => {
-                        let id = c.id.expect("detected transaction missing id").try_into()?;
+                        let id = c.id
+                            .ok_or_else(|| anyhow::anyhow!("Confirmed response missing transaction id"))?
+                            .try_into()?;
                         info!(id = %id, "penumbra transaction confirmed");
                         return Ok(id);
                     }

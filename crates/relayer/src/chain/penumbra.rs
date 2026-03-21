@@ -140,7 +140,9 @@ impl PenumbraChain {
                 *max_retries,
                 self.rt.clone(),
             ),
-            _ => unimplemented!(),
+            _ => return Err(Error::temp_penumbra_error(
+                "penumbra only supports pull-based event source (mode = 'pull')".to_string(),
+            )),
         }
         .map_err(Error::event_source)?;
 
@@ -162,7 +164,9 @@ impl PenumbraChain {
         &self,
         penumbra_tx_id: TransactionId,
     ) -> Result<Vec<IbcEventWithHeight>, Error> {
-        let txid = penumbra_tx_id.0.to_vec().try_into().unwrap();
+        let txid = penumbra_tx_id.0.to_vec().try_into().map_err(|_| {
+            Error::temp_penumbra_error("transaction id is not a valid 32-byte hash".to_string())
+        })?;
         let tm_tx = self
             .tendermint_rpc_client
             .tx(txid, false)
@@ -172,7 +176,8 @@ impl PenumbraChain {
                 Error::temp_penumbra_error(e.to_string())
             })?;
 
-        let height = ICSHeight::new(self.config.id.version(), u64::from(tm_tx.height)).unwrap();
+        let height = ICSHeight::new(self.config.id.version(), u64::from(tm_tx.height))
+            .map_err(|_| Error::invalid_height_no_source())?;
         let events = tm_tx
             .tx_result
             .events
@@ -258,7 +263,8 @@ impl PenumbraChain {
         let mut end_block_events = vec![];
 
         let tm_height =
-            tendermint::block::Height::try_from(block_height.revision_height()).unwrap();
+            tendermint::block::Height::try_from(block_height.revision_height())
+                .map_err(|e| Error::temp_penumbra_error(format!("invalid block height: {}", e)))?;
 
         let response = self
             .rt
@@ -463,9 +469,13 @@ impl ChainEndpoint for PenumbraChain {
 
         let unbonding_delay = app_parameters
             .app_parameters
-            .expect("should have app parameters")
+            .ok_or_else(|| Error::temp_penumbra_error(
+                "penumbra node returned empty app parameters".to_string(),
+            ))?
             .stake_params
-            .expect("should have stake parameters")
+            .ok_or_else(|| Error::temp_penumbra_error(
+                "penumbra node returned empty stake parameters".to_string(),
+            ))?
             .unbonding_delay;
 
         // here we assume roughly 5s block time, which is not part of consensus but should be
@@ -499,7 +509,7 @@ impl ChainEndpoint for PenumbraChain {
                         }
                     }
                 }
-                unreachable!()
+                Err(anyhow::anyhow!("view service sync exhausted all retries"))
             })
             .map_err(|e: anyhow::Error| Error::temp_penumbra_error(e.to_string()))?;
 
@@ -579,14 +589,14 @@ impl ChainEndpoint for PenumbraChain {
     }
 
     fn subscribe(&mut self) -> Result<Subscription, Error> {
-        let tx_monitor_cmd = match &self.tx_monitor_cmd {
-            Some(tx_monitor_cmd) => tx_monitor_cmd,
-            None => {
-                let tx_monitor_cmd = self.init_event_source()?;
-                self.tx_monitor_cmd = Some(tx_monitor_cmd);
-                self.tx_monitor_cmd.as_ref().unwrap()
-            }
-        };
+        if self.tx_monitor_cmd.is_none() {
+            let tx_monitor_cmd = self.init_event_source()?;
+            self.tx_monitor_cmd = Some(tx_monitor_cmd);
+        }
+        // Safe: we just ensured it's Some above.
+        let tx_monitor_cmd = self.tx_monitor_cmd.as_ref().ok_or_else(|| {
+            Error::temp_penumbra_error("event source not initialized".to_string())
+        })?;
 
         let subscription = tx_monitor_cmd.subscribe().map_err(Error::event_source)?;
         Ok(subscription)
@@ -660,7 +670,9 @@ impl ChainEndpoint for PenumbraChain {
             tendermint::hash::Algorithm::Sha256,
             &txid.0,
         )
-        .expect("transaction id should be valid sha256 hash");
+        .map_err(|e| Error::temp_penumbra_error(
+            format!("transaction id is not a valid sha256 hash: {}", e),
+        ))?;
 
         let response = tendermint_rpc::endpoint::broadcast::tx_sync::Response {
             code: tendermint::abci::Code::Ok,
@@ -727,11 +739,15 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         _key_name: Option<&str>,
     ) -> Result<Vec<crate::account::Balance>, Error> {
-        unimplemented!("cannot query balance of a shielded chain >:}}")
+        Err(Error::temp_penumbra_error(
+            "cannot query balance of a shielded chain".to_string(),
+        ))
     }
 
     fn query_denom_trace(&self, _hash: String) -> Result<crate::denom::DenomTrace, Error> {
-        todo!("penumbra doesn't support denom trace querying yet")
+        Err(Error::temp_penumbra_error(
+            "penumbra doesn't support denom trace querying".to_string(),
+        ))
     }
 
     fn query_commitment_prefix(
@@ -739,7 +755,10 @@ impl ChainEndpoint for PenumbraChain {
     ) -> Result<ibc_relayer_types::core::ics23_commitment::commitment::CommitmentPrefix, Error>
     {
         // This is hardcoded for now.
-        Ok(b"ibc-data".to_vec().try_into().unwrap())
+        // Infallible: non-empty byte slice always converts to CommitmentPrefix.
+        Ok(b"ibc-data".to_vec().try_into().map_err(|_| {
+            Error::temp_penumbra_error("failed to create commitment prefix".to_string())
+        })?)
     }
 
     fn query_application_status(&self) -> Result<ChainStatus, Error> {
@@ -820,7 +839,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok(clients)
             }
-            _ => unreachable!("query_clients: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_clients: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -847,7 +868,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok((client_state, result.proof))
             }
-            _ => unreachable!("query_client_state: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_client_state: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -882,7 +905,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok((consensus_state, result.proof))
             }
-            _ => unreachable!("query_consensus_state: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_consensus_state: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -905,7 +930,9 @@ impl ChainEndpoint for PenumbraChain {
                     .collect();
                 Ok(heights)
             }
-            _ => unreachable!("query_consensus_state_heights: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_consensus_state_heights: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -913,14 +940,18 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         _request: QueryUpgradedClientStateRequest,
     ) -> Result<(AnyClientState, MerkleProof), Error> {
-        todo!("need to implement corresponding state query in penumbra")
+        Err(Error::temp_penumbra_error(
+            "upgraded client state query not implemented for penumbra".to_string(),
+        ))
     }
 
     fn query_upgraded_consensus_state(
         &self,
         _request: QueryUpgradedConsensusStateRequest,
     ) -> Result<(AnyConsensusState, MerkleProof), Error> {
-        todo!("need to implement corresponding state query in penumbra")
+        Err(Error::temp_penumbra_error(
+            "upgraded consensus state query not implemented for penumbra".to_string(),
+        ))
     }
 
     fn query_connections(
@@ -961,7 +992,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok(connections)
             }
-            _ => unreachable!("query_connections: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_connections: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1022,7 +1055,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok((connection_end, result.proof))
             }
-            _ => unreachable!("query_connection: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_connection: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1055,7 +1090,9 @@ impl ChainEndpoint for PenumbraChain {
                     .collect();
                 Ok(channels)
             }
-            _ => unreachable!("query_connection_channels: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_connection_channels: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1089,7 +1126,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok(channels)
             }
-            _ => unreachable!("query_channels: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_channels: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1115,7 +1154,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok((channel_end, result.proof))
             }
-            _ => unreachable!("query_channel: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_channel: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1137,7 +1178,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok(client_state)
             }
-            _ => unreachable!("query_channel_client_state: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_channel_client_state: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1155,7 +1198,9 @@ impl ChainEndpoint for PenumbraChain {
 
         match result.response {
             IbcQueryResponse::PacketCommitment(resp) => Ok((resp.commitment, result.proof)),
-            _ => unreachable!("query_packet_commitment: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_packet_commitment: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1185,7 +1230,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok((commitment_sequences, height))
             }
-            _ => unreachable!("query_packet_commitments: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_packet_commitments: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1206,7 +1253,9 @@ impl ChainEndpoint for PenumbraChain {
             IbcQueryResponse::PacketReceipt(response) => {
                 Ok((vec![response.received.into()], result.proof))
             }
-            _ => unreachable!("query_packet_receipt: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_packet_receipt: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1229,7 +1278,9 @@ impl ChainEndpoint for PenumbraChain {
                     .map(|seq| seq.into())
                     .collect())
             }
-            _ => unreachable!("query_unreceived_packets: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_unreceived_packets: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1250,7 +1301,9 @@ impl ChainEndpoint for PenumbraChain {
             IbcQueryResponse::PacketAcknowledgement(response) => {
                 Ok((response.acknowledgement, result.proof))
             }
-            _ => unreachable!("query_packet_acknowledgement: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_packet_acknowledgement: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1279,7 +1332,9 @@ impl ChainEndpoint for PenumbraChain {
 
                 Ok((acks_sequences, height))
             }
-            _ => unreachable!("query_packet_acknowledgements: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_packet_acknowledgements: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1302,7 +1357,9 @@ impl ChainEndpoint for PenumbraChain {
                     .map(|seq| seq.into())
                     .collect())
             }
-            _ => unreachable!("query_unreceived_acknowledgements: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_unreceived_acknowledgements: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1323,7 +1380,9 @@ impl ChainEndpoint for PenumbraChain {
                 let next_seq: Sequence = response.next_sequence_receive.into();
                 Ok((next_seq, result.proof))
             }
-            _ => unreachable!("query_next_sequence_receive: unexpected response variant"),
+            _ => Err(Error::temp_penumbra_error(
+                "query_next_sequence_receive: unexpected response variant".to_string(),
+            )),
         }
     }
 
@@ -1404,7 +1463,9 @@ impl ChainEndpoint for PenumbraChain {
         &self,
         _request: QueryHostConsensusStateRequest,
     ) -> Result<Self::ConsensusState, Error> {
-        todo!("need to implement corresponding state query on penumbra")
+        Err(Error::temp_penumbra_error(
+            "host consensus state query not implemented for penumbra".to_string(),
+        ))
     }
 
     fn build_client_state(
@@ -1471,7 +1532,9 @@ impl ChainEndpoint for PenumbraChain {
     ) -> Result<(), Error> {
         // the payee is an optional payee to which reverse and timeout relayer packet
         // fees will be paid out.
-        todo!("currently unimplemented in penumbra")
+        Err(Error::temp_penumbra_error(
+            "counterparty payee registration not implemented for penumbra".to_string(),
+        ))
     }
 
     fn cross_chain_query(
@@ -1481,20 +1544,24 @@ impl ChainEndpoint for PenumbraChain {
         Vec<ibc_relayer_types::applications::ics31_icq::response::CrossChainQueryResponse>,
         Error,
     > {
-        // https://github.com/cosmos/ibc/blob/main/spec/app/ics-031-crosschain-queries/README.md
-        todo!("not currently implemented in penumbra")
+        Err(Error::temp_penumbra_error(
+            "cross-chain queries not implemented for penumbra".to_string(),
+        ))
     }
 
     fn query_incentivized_packet(
         &self,
         _request: ibc_proto::ibc::apps::fee::v1::QueryIncentivizedPacketRequest,
     ) -> Result<ibc_proto::ibc::apps::fee::v1::QueryIncentivizedPacketResponse, Error> {
-        // https://buf.build/cosmos/ibc/docs/e769eb46d1e742e8b0368510479161df:ibc.applications.fee.v1#ibc.applications.fee.v1.Query.IncentivizedPackets
-        unimplemented!("not implemented in penumbra")
+        Err(Error::temp_penumbra_error(
+            "incentivized packets not implemented for penumbra".to_string(),
+        ))
     }
 
     fn query_consumer_chains(&self) -> Result<Vec<ConsumerChain>, Error> {
-        unimplemented!("not currently implemented in penumbra")
+        Err(Error::temp_penumbra_error(
+            "consumer chains not implemented for penumbra".to_string(),
+        ))
     }
 
     fn query_upgrade(
@@ -1509,7 +1576,9 @@ impl ChainEndpoint for PenumbraChain {
         ),
         Error,
     > {
-        unimplemented!("not currently implemented in penumbra")
+        Err(Error::temp_penumbra_error(
+            "channel upgrade not implemented for penumbra".to_string(),
+        ))
     }
 
     fn query_upgrade_error(
@@ -1524,14 +1593,18 @@ impl ChainEndpoint for PenumbraChain {
         ),
         Error,
     > {
-        unimplemented!("not currently implemented in penumbra")
+        Err(Error::temp_penumbra_error(
+            "channel upgrade error not implemented for penumbra".to_string(),
+        ))
     }
 
     fn query_ccv_consumer_id(
         &self,
         _client_id: ClientId,
     ) -> Result<ibc_relayer_types::applications::ics28_ccv::msgs::ConsumerId, Error> {
-        unimplemented!("not currently implemented in penumbra")
+        Err(Error::temp_penumbra_error(
+            "consumer id query not implemented for penumbra".to_string(),
+        ))
     }
 }
 
