@@ -312,24 +312,62 @@ impl PenumbraChain {
         .await
     }
 
+    /// Detect if an error indicates a stale SCT / view database.
+    fn is_stale_sct_error(err: &str) -> bool {
+        err.contains("spend proof did not verify")
+            || err.contains("not a valid SCT root")
+            || err.contains("Note commitment missing")
+    }
+
+    /// Reset the view database and exit the process so systemd restarts us.
+    /// The fresh start will create a new view DB and resync from the chain.
+    fn reset_view_db_and_exit(&self) -> ! {
+        let Some(ref dir) = self.config.view_service_storage_dir else {
+            tracing::error!("stale SCT detected but no storage dir configured — cannot auto-recover");
+            std::process::exit(1);
+        };
+        let db_path = format!("{}/relayer-view.sqlite", dir);
+        for suffix in &["", "-wal", "-shm"] {
+            let path = format!("{}{}", db_path, suffix);
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(path = %path, error = %e, "failed to remove view db file");
+                }
+            }
+        }
+        tracing::error!("view database reset due to stale SCT — restarting to resync");
+        std::process::exit(1);
+    }
+
     async fn send_messages_in_penumbratx(
         &mut self,
         tracked_msgs: TrackedMsgs,
         wait_for_commit: bool,
     ) -> Result<penumbra_sdk_transaction::txhash::TransactionId, Error> {
-        let tx = self.build_penumbra_tx(tracked_msgs).await.map_err(|e| {
-            tracing::error!("error building penumbra transaction: {}", e);
-            Error::from(e)
-        })?;
+        let tx = match self.build_penumbra_tx(tracked_msgs.clone()).await {
+            Ok(tx) => tx,
+            Err(e) => {
+                let err_str = e.to_string();
+                tracing::error!("error building penumbra transaction: {}", err_str);
+                if Self::is_stale_sct_error(&err_str) {
+                    self.reset_view_db_and_exit();
+                }
+                return Err(Error::from(e));
+            }
+        };
 
         let mut view_client = self.view_client.lock().await.clone();
-        let penumbra_txid =
-            tx::submit_transaction(&mut view_client, tx, wait_for_commit)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error submitting transaction: {}", e);
-                    Error::from(e)
-                })?;
+        let penumbra_txid = match tx::submit_transaction(&mut view_client, tx, wait_for_commit).await {
+            Ok(id) => id,
+            Err(e) => {
+                let err_str = e.to_string();
+                tracing::error!("error submitting transaction: {}", err_str);
+                if Self::is_stale_sct_error(&err_str) {
+                    self.reset_view_db_and_exit();
+                }
+                return Err(Error::from(e));
+            }
+        };
 
         // wait for two blocks of confirmation to be sure that the potentially load-balanced endpoints are synced
         if wait_for_commit {
