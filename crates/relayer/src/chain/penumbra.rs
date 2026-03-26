@@ -313,10 +313,13 @@ impl PenumbraChain {
     }
 
     /// Detect if an error indicates a stale SCT / view database.
-    fn is_stale_sct_error(err: &str) -> bool {
-        err.contains("spend proof did not verify")
-            || err.contains("not a valid SCT root")
-            || err.contains("Note commitment missing")
+    /// Uses Debug format to catch nested error chains (e.g. PenumbraError::TxBroadcast
+    /// wrapping an anyhow::Error wrapping the actual gRPC status message).
+    fn is_stale_sct_error(err: &dyn std::fmt::Debug) -> bool {
+        let msg = format!("{:?}", err);
+        msg.contains("spend proof did not verify")
+            || msg.contains("not a valid SCT root")
+            || msg.contains("Note commitment missing")
     }
 
     /// Reset the view database and exit the process so systemd restarts us.
@@ -349,7 +352,7 @@ impl PenumbraChain {
             Err(e) => {
                 let err_str = e.to_string();
                 tracing::error!("error building penumbra transaction: {}", err_str);
-                if Self::is_stale_sct_error(&err_str) {
+                if Self::is_stale_sct_error(&e) {
                     self.reset_view_db_and_exit();
                 }
                 return Err(Error::from(e));
@@ -362,7 +365,7 @@ impl PenumbraChain {
             Err(e) => {
                 let err_str = e.to_string();
                 tracing::error!("error submitting transaction: {}", err_str);
-                if Self::is_stale_sct_error(&err_str) {
+                if Self::is_stale_sct_error(&e) {
                     self.reset_view_db_and_exit();
                 }
                 return Err(Error::from(e));
