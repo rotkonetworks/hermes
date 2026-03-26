@@ -8042,8 +8042,6 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-view"
 version = "2.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79c9645b94d05887d3d31edbcbdb1cdd18aaf816505a53a0650d5e8a50bdd8aa"
 dependencies = [
  "anyhow",
  "ark-std 0.4.0",

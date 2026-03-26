@@ -134,3 +134,9 @@ overflow-checks = true
 # tendermint-light-client-verifier = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
 # tendermint-light-client-detector = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
 # tendermint-testgen               = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
+
+# Fix: bail on out-of-order compact blocks instead of silently skipping them.
+# The upstream worker.rs `continue`s on height mismatch, which corrupts the
+# in-memory SCT permanently. This patch makes it error out so the sync loop
+# reconnects from the correct height with a fresh SCT from storage.
+penumbra-sdk-view = { path = "/tmp/penumbra-sdk-view-patched" }
