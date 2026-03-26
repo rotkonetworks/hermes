@@ -139,4 +139,4 @@ overflow-checks = true
 # The upstream worker.rs `continue`s on height mismatch, which corrupts the
 # in-memory SCT permanently. This patch makes it error out so the sync loop
 # reconnects from the correct height with a fresh SCT from storage.
-penumbra-sdk-view = { path = "/tmp/penumbra-sdk-view-patched" }
+penumbra-sdk-view = { path = "crates/penumbra-sdk-view-patched" }
