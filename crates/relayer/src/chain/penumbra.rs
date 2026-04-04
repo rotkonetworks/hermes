@@ -118,6 +118,43 @@ pub struct PenumbraChain {
     unbonding_period: Duration,
 }
 
+/// Detect if a message indicates a stale SCT / view database.
+/// Checks both error messages (from `is_stale_sct_error`) and panic messages
+/// (from `catch_unwind` in the chain runtime). Covers:
+/// - "spend proof did not verify" — validator rejected our spend proof
+/// - "not a valid SCT root" — our SCT anchor doesn't match the chain
+/// - "Note commitment missing" — note we tried to spend is gone
+/// - "commitment must be witnessed" — panic from penumbra-sdk-tct when the
+///   SCT tree has a corrupted/inconsistent state (indexed but not witnessed)
+pub fn is_stale_sct_message(msg: &str) -> bool {
+    msg.contains("spend proof did not verify")
+        || msg.contains("not a valid SCT root")
+        || msg.contains("Note commitment missing")
+        || msg.contains("commitment must be witnessed")
+}
+
+/// Reset the Penumbra view database and exit the process so systemd restarts us.
+/// The fresh start will create a new view DB and resync from the chain.
+/// Called both from within PenumbraChain methods (on error) and from the
+/// chain runtime's catch_unwind handler (on panic).
+pub fn reset_penumbra_view_db_and_exit(storage_dir: Option<&str>) -> ! {
+    let Some(dir) = storage_dir else {
+        tracing::error!("stale SCT detected but no storage dir configured — cannot auto-recover");
+        std::process::exit(1);
+    };
+    let db_path = format!("{}/relayer-view.sqlite", dir);
+    for suffix in &["", "-wal", "-shm"] {
+        let path = format!("{}{}", db_path, suffix);
+        if let Err(e) = std::fs::remove_file(&path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(path = %path, error = %e, "failed to remove view db file");
+            }
+        }
+    }
+    tracing::error!("view database reset due to stale SCT — restarting to resync");
+    std::process::exit(1);
+}
+
 impl PenumbraChain {
     fn init_event_source(&mut self) -> Result<TxEventSourceCmd, Error> {
         crate::time!(
@@ -312,34 +349,13 @@ impl PenumbraChain {
         .await
     }
 
-    /// Detect if an error indicates a stale SCT / view database.
-    /// Uses Debug format to catch nested error chains (e.g. PenumbraError::TxBroadcast
-    /// wrapping an anyhow::Error wrapping the actual gRPC status message).
     fn is_stale_sct_error(err: &dyn std::fmt::Debug) -> bool {
-        let msg = format!("{:?}", err);
-        msg.contains("spend proof did not verify")
-            || msg.contains("not a valid SCT root")
-            || msg.contains("Note commitment missing")
+        is_stale_sct_message(&format!("{:?}", err))
     }
 
-    /// Reset the view database and exit the process so systemd restarts us.
-    /// The fresh start will create a new view DB and resync from the chain.
     fn reset_view_db_and_exit(&self) -> ! {
-        let Some(ref dir) = self.config.view_service_storage_dir else {
-            tracing::error!("stale SCT detected but no storage dir configured — cannot auto-recover");
-            std::process::exit(1);
-        };
-        let db_path = format!("{}/relayer-view.sqlite", dir);
-        for suffix in &["", "-wal", "-shm"] {
-            let path = format!("{}{}", db_path, suffix);
-            if let Err(e) = std::fs::remove_file(&path) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(path = %path, error = %e, "failed to remove view db file");
-                }
-            }
-        }
-        tracing::error!("view database reset due to stale SCT — restarting to resync");
-        std::process::exit(1);
+        let dir = self.config.view_service_storage_dir.as_deref();
+        reset_penumbra_view_db_and_exit(dir);
     }
 
     async fn send_messages_in_penumbratx(

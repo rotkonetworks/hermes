@@ -36,6 +36,7 @@ use ibc_relayer_types::{
 
 use crate::{
     account::Balance,
+    chain::penumbra::{is_stale_sct_message, reset_penumbra_view_db_and_exit},
     client_state::{AnyClientState, IdentifiedAnyClientState},
     config::ChainConfig,
     connection::ConnectionMsgType,
@@ -184,6 +185,25 @@ where
                             } else {
                                 "unknown panic".to_string()
                             };
+
+                            // If this is an SCT/view-DB corruption panic (e.g.
+                            // "commitment must be witnessed because it is indexed"),
+                            // continuing is pointless — the DB is permanently broken
+                            // and every future tx attempt will panic the same way.
+                            // Wipe the view DB and exit so systemd restarts us fresh.
+                            if is_stale_sct_message(&msg) {
+                                error!(
+                                    "[{}] SCT corruption panic detected, resetting view DB: {}",
+                                    chain_id, msg
+                                );
+                                let config = self.chain.config();
+                                let dir = match &config {
+                                    ChainConfig::Penumbra(cfg) => cfg.view_service_storage_dir.as_deref(),
+                                    _ => None,
+                                };
+                                reset_penumbra_view_db_and_exit(dir);
+                            }
+
                             error!(
                                 "[{}] chain runtime handler panicked, recovering: {}",
                                 chain_id, msg
