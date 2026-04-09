@@ -116,6 +116,10 @@ pub struct PenumbraChain {
     tx_monitor_cmd: Option<TxEventSourceCmd>,
 
     unbonding_period: Duration,
+
+    /// Lock that pauses the view service sync worker during transaction building.
+    /// Prevents the race where notes are forgotten from the SCT between planning and witnessing.
+    tx_build_lock: Arc<tokio::sync::RwLock<()>>,
 }
 
 /// Detect if a message indicates a stale SCT / view database.
@@ -345,6 +349,7 @@ impl PenumbraChain {
             &mut self.custody_client,
             &fvk,
             tracked_msgs,
+            &self.tx_build_lock,
         )
         .await
     }
@@ -496,7 +501,7 @@ impl ChainEndpoint for PenumbraChain {
 
         // No support for custom registry.json files in Hermes yet.
         let registry_path: Option<String> = None;
-        let svc = rt
+        let view_server = rt
             .block_on(ViewServer::load_or_initialize(
                 view_file,
                 registry_path,
@@ -505,7 +510,12 @@ impl ChainEndpoint for PenumbraChain {
             ))
             .map_err(|e| Error::temp_penumbra_error(e.to_string()))?;
 
-        let svc = ViewServiceServer::new(svc);
+        // Extract the tx_build_lock before wrapping in gRPC server.
+        // This lock pauses the sync worker during transaction building,
+        // preventing races between note selection and SCT witness forgetting.
+        let tx_build_lock = view_server.tx_build_lock();
+
+        let svc = ViewServiceServer::new(view_server);
         let mut view_client = ViewServiceClient::new(box_grpc_svc::local(svc));
 
         let soft_kms = penumbra_sdk_custody::soft_kms::SoftKms::new(config.kms_config.clone());
@@ -613,6 +623,7 @@ impl ChainEndpoint for PenumbraChain {
 
             query_service,
             unbonding_period,
+            tx_build_lock,
         })
     }
 

@@ -48,6 +48,9 @@ pub struct Worker {
     sync_height_tx: watch::Sender<u64>,
     /// Tonic channel used to create GRPC clients.
     channel: Channel,
+    /// Lock that pauses block processing while a transaction is being built.
+    /// The sync worker holds the read side; the tx builder holds the write side.
+    tx_build_lock: Arc<RwLock<()>>,
 }
 
 impl Worker {
@@ -61,6 +64,7 @@ impl Worker {
     pub async fn new(
         storage: Storage,
         channel: Channel,
+        tx_build_lock: Arc<RwLock<()>>,
     ) -> Result<
         (
             Self,
@@ -95,6 +99,7 @@ impl Worker {
                 error_slot: error_slot.clone(),
                 sync_height_tx,
                 channel,
+                tx_build_lock,
             },
             sct,
             error_slot,
@@ -235,6 +240,12 @@ impl Worker {
                 );
             }
             expected_height += 1;
+
+            // Wait for any in-progress transaction build to finish before
+            // processing this block. The tx builder holds the write side of
+            // tx_build_lock during plan+witness+build, preventing us from
+            // forgetting notes that the planner just selected.
+            let _build_guard = self.tx_build_lock.read().await;
 
             // Lock the SCT only while processing this block.
             let mut sct_guard = self.sct.write().await;

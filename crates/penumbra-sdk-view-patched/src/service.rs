@@ -91,6 +91,10 @@ pub struct ViewServer {
     node: Url,
     /// Used to watch for changes to the sync height.
     sync_height_rx: watch::Receiver<u64>,
+    /// Lock that pauses the sync worker during transaction building.
+    /// The tx builder holds the write side; the sync worker holds the read side.
+    /// This prevents notes from being forgotten between SQL selection and SCT witnessing.
+    tx_build_lock: Arc<RwLock<()>>,
 }
 
 impl ViewServer {
@@ -127,8 +131,10 @@ impl ViewServer {
         let span = tracing::error_span!(parent: None, "view");
         let channel = Self::get_pd_channel(node.clone()).await?;
 
+        let tx_build_lock = Arc::new(RwLock::new(()));
+
         let (worker, state_commitment_tree, error_slot, sync_height_rx) =
-            Worker::new(storage.clone(), channel)
+            Worker::new(storage.clone(), channel, tx_build_lock.clone())
                 .instrument(span.clone())
                 .tap(|_| tracing::trace!("constructing view server worker"))
                 .await?
@@ -143,7 +149,17 @@ impl ViewServer {
             sync_height_rx,
             state_commitment_tree,
             node,
+            tx_build_lock,
         })
+    }
+
+    /// Returns the transaction build lock.
+    ///
+    /// Holding the write side of this lock pauses the sync worker,
+    /// preventing notes from being forgotten between SQL selection
+    /// and SCT witnessing during transaction building.
+    pub fn tx_build_lock(&self) -> Arc<RwLock<()>> {
+        self.tx_build_lock.clone()
     }
 
     /// Obtain a Tonic [Channel] to a remote `pd` endpoint.

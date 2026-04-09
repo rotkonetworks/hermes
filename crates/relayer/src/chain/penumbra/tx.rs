@@ -4,8 +4,11 @@
 //! (plan -> build -> sign -> submit -> confirm) from the ChainEndpoint impl,
 //! making each step independently testable and composable.
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use futures::{FutureExt, TryStreamExt};
+use tokio::sync::RwLock;
 use tracing::info;
 
 use penumbra_sdk_fee::FeeTier;
@@ -37,6 +40,7 @@ pub async fn build_penumbra_tx(
     custody_client: &mut CustodyServiceClient<BoxGrpcService>,
     fvk: &FullViewingKey,
     tracked_msgs: TrackedMsgs,
+    tx_build_lock: &Arc<RwLock<()>>,
 ) -> Result<Transaction, PenumbraError> {
     let gas_prices = view_client
         .gas_prices(GasPricesRequest {})
@@ -70,6 +74,16 @@ pub async fn build_penumbra_tx(
         planner.ibc_action(ibc_action);
     }
 
+    // Pause the sync worker for the entire plan+witness+build cycle.
+    // The planner reads spendable notes from the SQL database, then
+    // build_transaction() calls witness() on the SCT. If the sync worker
+    // processes a block between these two steps, it can forget() a note
+    // from the SCT that the planner just selected, causing
+    // "Note commitment missing". Holding the write lock here prevents
+    // the sync worker (which holds the read lock) from processing blocks
+    // until we're done building the transaction.
+    let _sync_pause = tx_build_lock.write().await;
+
     let plan = planner
         .plan(view_client, AddressIndex::new(0))
         .await
@@ -77,11 +91,16 @@ pub async fn build_penumbra_tx(
             reason: format!("planner failed: {}", e),
         })?;
 
-    penumbra_sdk_wallet::build_transaction(fvk, view_client, custody_client, plan)
+    let tx = penumbra_sdk_wallet::build_transaction(fvk, view_client, custody_client, plan)
         .await
         .map_err(|e| PenumbraError::TxBuild {
             reason: format!("build_transaction failed: {}", e),
-        })
+        })?;
+
+    // Explicitly drop to allow sync to resume before submission.
+    drop(_sync_pause);
+
+    Ok(tx)
 }
 
 /// Broadcast a built transaction via the ViewClient and wait for confirmation.
