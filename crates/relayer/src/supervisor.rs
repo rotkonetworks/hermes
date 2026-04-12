@@ -227,10 +227,13 @@ pub fn spawn_supervisor_tasks<Chain: ChainHandle>(
     // the chain scan would be lost because subscriptions weren't active yet.
     // Events will queue in the subscription buffer and be processed once
     // batch workers are spawned. See: https://github.com/informalsystems/hermes/issues/2748
+    info!("initializing event subscriptions");
     let subscriptions = init_subscriptions(&config, &mut registry.write())?;
+    info!("event subscriptions initialized, {} chains subscribed", subscriptions.len());
 
     // Only scan when needed
     if should_scan(&config, &options) {
+        info!("starting chain scan");
         let scan = chain_scanner(
             &config,
             &mut registry.write(),
@@ -763,6 +766,7 @@ fn init_subscriptions<Chain: ChainHandle>(
     let mut subscriptions = Vec::with_capacity(chains.len());
 
     for chain_config in chains {
+        info!("subscribing to events for chain {}", chain_config.id());
         let chain = match registry.get_or_spawn(chain_config.id()) {
             Ok(chain) => chain,
             Err(e) => {
@@ -777,7 +781,10 @@ fn init_subscriptions<Chain: ChainHandle>(
         };
 
         match chain.subscribe() {
-            Ok(subscription) => subscriptions.push((chain, subscription)),
+            Ok(subscription) => {
+                info!("subscribed to events for chain {}", chain_config.id());
+                subscriptions.push((chain, subscription));
+            }
             Err(e) => error!(
                 "failed to subscribe to events of {}: {}",
                 chain_config.id(),
