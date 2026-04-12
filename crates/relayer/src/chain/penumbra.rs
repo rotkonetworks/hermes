@@ -141,12 +141,19 @@ pub fn is_stale_sct_message(msg: &str) -> bool {
 /// The fresh start will create a new view DB and resync from the chain.
 /// Called both from within PenumbraChain methods (on error) and from the
 /// chain runtime's catch_unwind handler (on panic).
+///
+/// Safety: we fsync the parent directory after removing each file to ensure
+/// the deletions are durable before exiting. This prevents a crash between
+/// unlink and exit from leaving a half-deleted state where, e.g., the WAL
+/// file exists but the main DB file doesn't.
 pub fn reset_penumbra_view_db_and_exit(storage_dir: Option<&str>) -> ! {
     let Some(dir) = storage_dir else {
         tracing::error!("stale SCT detected but no storage dir configured — cannot auto-recover");
         std::process::exit(1);
     };
     let db_path = format!("{}/relayer-view.sqlite", dir);
+
+    // Remove all SQLite files: main DB, WAL, and shared-memory.
     for suffix in &["", "-wal", "-shm"] {
         let path = format!("{}{}", db_path, suffix);
         if let Err(e) = std::fs::remove_file(&path) {
@@ -155,6 +162,14 @@ pub fn reset_penumbra_view_db_and_exit(storage_dir: Option<&str>) -> ! {
             }
         }
     }
+
+    // Fsync the directory to ensure the unlinks are durable on disk.
+    // Without this, a power loss between unlink and exit could leave
+    // stale directory entries.
+    if let Ok(dir_handle) = std::fs::File::open(dir) {
+        let _ = dir_handle.sync_all();
+    }
+
     tracing::error!("view database reset due to stale SCT — restarting to resync");
     std::process::exit(1);
 }
