@@ -142,24 +142,40 @@ pub fn is_stale_sct_message(msg: &str) -> bool {
 /// Called both from within PenumbraChain methods (on error) and from the
 /// chain runtime's catch_unwind handler (on panic).
 ///
-/// Safety: we fsync the parent directory after removing each file to ensure
-/// the deletions are durable before exiting. This prevents a crash between
-/// unlink and exit from leaving a half-deleted state where, e.g., the WAL
-/// file exists but the main DB file doesn't.
+/// Safety:
+/// - We wait briefly before deleting to let any in-flight SQLite WAL writes
+///   complete. We cannot access the connection pool from this static context,
+///   so a short sleep is the safest we can do.
+/// - We fsync the parent directory after removing each file to ensure
+///   the deletions are durable before exiting. This prevents a crash between
+///   unlink and exit from leaving a half-deleted state where, e.g., the WAL
+///   file exists but the main DB file doesn't.
+/// - We flush logs before exiting so the final error message is not lost.
 pub fn reset_penumbra_view_db_and_exit(storage_dir: Option<&str>) -> ! {
     let Some(dir) = storage_dir else {
         tracing::error!("stale SCT detected but no storage dir configured — cannot auto-recover");
-        std::process::exit(1);
+        flush_and_exit(1);
     };
     let db_path = format!("{}/relayer-view.sqlite", dir);
+
+    tracing::error!(
+        storage_dir = %dir,
+        "stale SCT detected — waiting for in-flight DB operations before wiping view database"
+    );
+
+    // Give any in-flight SQLite WAL writes time to complete. We cannot
+    // cleanly close the connection pool from a static/diverging function,
+    // so a brief pause is the best we can do to avoid unlinking files
+    // while SQLite is mid-write.
+    std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Remove all SQLite files: main DB, WAL, and shared-memory.
     for suffix in &["", "-wal", "-shm"] {
         let path = format!("{}{}", db_path, suffix);
-        if let Err(e) = std::fs::remove_file(&path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(path = %path, error = %e, "failed to remove view db file");
-            }
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(path = %path, "removed view db file"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(path = %path, error = %e, "failed to remove view db file"),
         }
     }
 
@@ -171,7 +187,21 @@ pub fn reset_penumbra_view_db_and_exit(storage_dir: Option<&str>) -> ! {
     }
 
     tracing::error!("view database reset due to stale SCT — restarting to resync");
-    std::process::exit(1);
+    flush_and_exit(1);
+}
+
+/// Flush the tracing/log subscriber and exit. The sleep gives async log
+/// sinks (journald, file appender) time to drain their buffers so the
+/// final error messages are not lost on hard exit.
+fn flush_and_exit(code: i32) -> ! {
+    // Drop the default tracing subscriber's guard (if any) by flushing
+    // explicitly. `tracing` itself does not expose a flush API, but the
+    // underlying `tracing_appender` non-blocking writers flush on drop.
+    // We trigger a global flush by dispatching a final event and then
+    // sleeping to let the I/O thread catch up.
+    tracing::error!("hermes exiting with code {code} — flushing logs");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::process::exit(code);
 }
 
 impl PenumbraChain {
@@ -565,6 +595,28 @@ impl ChainEndpoint for PenumbraChain {
         // trusting period in terms of blocks instead of duration.
         let unbonding_period = Duration::from_secs(unbonding_delay * 5);
 
+        // Determine sync timeout based on whether the view DB already exists.
+        // Initial sync (no DB or empty DB) can take much longer than a catch-up sync.
+        let sync_timeout = match &config.view_service_storage_dir {
+            Some(dir_string) => {
+                let db_path = std::path::PathBuf::from(dir_string).join("relayer-view.sqlite");
+                match std::fs::metadata(&db_path) {
+                    Ok(meta) if meta.len() > 0 => {
+                        tracing::info!("existing view DB found ({} bytes), using 30s sync timeout", meta.len());
+                        Duration::from_secs(30)
+                    }
+                    _ => {
+                        tracing::info!("no existing view DB found, using 120s sync timeout for initial sync");
+                        Duration::from_secs(120)
+                    }
+                }
+            }
+            None => {
+                tracing::info!("in-memory view DB, using 120s sync timeout");
+                Duration::from_secs(120)
+            }
+        };
+
         tracing::info!("starting view service sync");
 
         let sync_height = rt
@@ -572,22 +624,36 @@ impl ChainEndpoint for PenumbraChain {
                 // Penumbra's compact block stream may return blocks out of order
                 // during initial sync, causing transient errors. Retry up to 5 times.
                 for attempt in 1..=5 {
-                    match async {
+                    match tokio::time::timeout(sync_timeout, async {
                         let mut stream = ViewClient::status_stream(&mut view_client).await?;
                         let mut sync_height = 0u64;
                         while let Some(status) = stream.next().await.transpose()? {
                             sync_height = status.full_sync_height;
                         }
                         Ok::<u64, anyhow::Error>(sync_height)
-                    }.await {
-                        Ok(height) => return Ok(height),
-                        Err(e) => {
+                    }).await {
+                        Ok(Ok(height)) => return Ok(height),
+                        Ok(Err(e)) => {
                             tracing::warn!(attempt, error = %e, "view service sync failed, retrying...");
                             if attempt < 5 {
                                 tokio::time::sleep(Duration::from_secs(2)).await;
                             } else {
                                 return Err(e);
                             }
+                        }
+                        Err(_elapsed) => {
+                            tracing::warn!(
+                                attempt,
+                                timeout_secs = sync_timeout.as_secs(),
+                                "view service sync timed out, retrying..."
+                            );
+                            if attempt >= 5 {
+                                return Err(anyhow::anyhow!(
+                                    "view service sync timed out after {}s on all 5 attempts",
+                                    sync_timeout.as_secs()
+                                ));
+                            }
+                            tokio::time::sleep(Duration::from_secs(2)).await;
                         }
                     }
                 }

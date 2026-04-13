@@ -1,4 +1,5 @@
 use core::fmt::Debug;
+use std::time::Duration;
 
 use tracing::error;
 
@@ -39,10 +40,13 @@ where
         .send(req)
         .map_err(|e| RestApiError::ChannelSend(e.to_string()))?;
 
-    // Wait for the reply
-    reply_receiver
-        .recv()
-        .map_err(|e| RestApiError::ChannelRecv(e.to_string()))?
+    // Wait for the reply with a timeout so the REST API remains responsive
+    // during supervisor startup/initialization
+    match reply_receiver.recv_timeout(Duration::from_secs(5)) {
+        Ok(result) => result,
+        Err(channel::RecvTimeoutError::Timeout) => Err(RestApiError::SupervisorTimeout),
+        Err(e) => Err(RestApiError::ChannelRecv(e.to_string())),
+    }
 }
 
 pub fn all_chain_ids(sender: &channel::Sender<Request>) -> Result<Vec<ChainId>, RestApiError> {

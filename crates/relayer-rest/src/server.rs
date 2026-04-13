@@ -5,7 +5,8 @@ use std::{
 
 use axum::{
     extract::{Path, Query},
-    response::IntoResponse,
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Extension, Json, Router, Server,
 };
@@ -49,27 +50,37 @@ impl<R, E> From<Result<R, E>> for JsonResult<R, E> {
     }
 }
 
-async fn get_version(Extension(sender): Extension<Sender>) -> impl IntoResponse {
-    let version: Result<_, RestApiError> = Ok(assemble_version_info(&sender));
-    Json(JsonResult::from(version))
+/// Wraps a Result into a JSON response, returning HTTP 503 if the error is a supervisor timeout.
+fn json_response<R: Serialize>(result: Result<R, RestApiError>) -> Response {
+    let is_timeout = matches!(&result, Err(RestApiError::SupervisorTimeout));
+    let json_result = JsonResult::from(result);
+    let json = Json(json_result);
+
+    if is_timeout {
+        (StatusCode::SERVICE_UNAVAILABLE, json).into_response()
+    } else {
+        json.into_response()
+    }
 }
 
-async fn get_chains(Extension(sender): Extension<Sender>) -> impl IntoResponse {
-    let chain_ids = all_chain_ids(&sender);
-    Json(JsonResult::from(chain_ids))
+async fn get_version(Extension(sender): Extension<Sender>) -> Response {
+    let version: Result<_, RestApiError> = Ok(assemble_version_info(&sender));
+    json_response(version)
+}
+
+async fn get_chains(Extension(sender): Extension<Sender>) -> Response {
+    json_response(all_chain_ids(&sender))
 }
 
 async fn get_chain(
     Path(id): Path<String>,
     Extension(sender): Extension<Sender>,
-) -> impl IntoResponse {
-    let chain = chain_config(&sender, &id);
-    Json(JsonResult::from(chain))
+) -> Response {
+    json_response(chain_config(&sender, &id))
 }
 
-async fn get_state(Extension(sender): Extension<Sender>) -> impl IntoResponse {
-    let state = supervisor_state(&sender);
-    Json(JsonResult::from(state))
+async fn get_state(Extension(sender): Extension<Sender>) -> Response {
+    json_response(supervisor_state(&sender))
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,9 +91,8 @@ struct ClearPacketParams {
 async fn clear_packets(
     Extension(sender): Extension<Sender>,
     Query(params): Query<ClearPacketParams>,
-) -> impl IntoResponse {
-    let result = trigger_clear_packets(&sender, params.chain);
-    Json(JsonResult::from(result))
+) -> Response {
+    json_response(trigger_clear_packets(&sender, params.chain))
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,14 +109,12 @@ fn default_limit() -> usize {
 async fn history(
     Extension(sender): Extension<Sender>,
     Query(params): Query<HistoryParams>,
-) -> impl IntoResponse {
-    let result = get_history(&sender, params.limit, params.chain);
-    Json(JsonResult::from(result))
+) -> Response {
+    json_response(get_history(&sender, params.limit, params.chain))
 }
 
-async fn stats(Extension(sender): Extension<Sender>) -> impl IntoResponse {
-    let result = get_stats(&sender);
-    Json(JsonResult::from(result))
+async fn stats(Extension(sender): Extension<Sender>) -> Response {
+    json_response(get_stats(&sender))
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,14 +125,12 @@ struct PendingParams {
 async fn pending(
     Extension(sender): Extension<Sender>,
     Query(params): Query<PendingParams>,
-) -> impl IntoResponse {
-    let result = get_pending(&sender, params.chain);
-    Json(JsonResult::from(result))
+) -> Response {
+    json_response(get_pending(&sender, params.chain))
 }
 
-async fn balances(Extension(sender): Extension<Sender>) -> impl IntoResponse {
-    let result = get_balances(&sender);
-    Json(JsonResult::from(result))
+async fn balances(Extension(sender): Extension<Sender>) -> Response {
+    json_response(get_balances(&sender))
 }
 
 type Sender = channel::Sender<Request>;

@@ -23,6 +23,9 @@ pub enum RestApiError {
     #[error("failed while parsing the request body into a chain configuration: {0}")]
     InvalidChainConfig(String),
 
+    #[error("supervisor did not respond within timeout, likely still initializing")]
+    SupervisorTimeout,
+
     #[error("not implemented")]
     Unimplemented,
 }
@@ -36,6 +39,7 @@ impl RestApiError {
             RestApiError::ChainConfigNotFound(_) => "ChainConfigNotFound",
             RestApiError::InvalidChainId(_, _) => "InvalidChainId",
             RestApiError::InvalidChainConfig(_) => "InvalidChainConfig",
+            RestApiError::SupervisorTimeout => "SupervisorTimeout",
             RestApiError::Unimplemented => "Unimplemented",
         }
     }

@@ -31,11 +31,12 @@ use crate::{
         source::{self, Error as EventError, ErrorDetail as EventErrorDetail, EventBatch},
         IbcEventWithHeight,
     },
+    foreign_client::ForeignClient,
     object::Object,
     registry::{Registry, SharedRegistry},
     rest,
     rest::request::{ChainBalance, ChannelPending},
-    supervisor::scan::ScanMode,
+    supervisor::scan::{ChainsScan, ScanMode},
     telemetry,
     util::{
         lock::LockExt,
@@ -249,6 +250,11 @@ pub fn spawn_supervisor_tasks<Chain: ChainHandle>(
         info!("scanned chains:");
         info!("{}", scan);
 
+        // Proactively refresh all discovered clients on startup.
+        // This ensures a freshly restarted hermes immediately brings clients up to date,
+        // preventing expiry if hermes was down for a significant portion of the trusting period.
+        refresh_all_clients_on_startup(&scan, &mut registry.write());
+
         spawn_context(&config, &mut registry.write(), &mut workers.acquire_write())
             .spawn_workers(scan);
     }
@@ -278,6 +284,110 @@ pub fn spawn_supervisor_tasks<Chain: ChainHandle>(
     tasks.push(cleanup_task);
 
     Ok(tasks)
+}
+
+/// On startup, forcibly refresh every IBC client discovered during the chain scan.
+/// This is critical for reliability: if hermes was restarted (or crashed), clients
+/// may be approaching expiry. By refreshing all clients immediately, we ensure
+/// no client expires due to downtime.
+fn refresh_all_clients_on_startup<Chain: ChainHandle>(
+    scan: &ChainsScan,
+    registry: &mut Registry<Chain>,
+) {
+    info!("proactive client refresh: refreshing all discovered clients on startup");
+
+    let mut refreshed = 0u32;
+    let mut failed = 0u32;
+
+    for chain_scan in scan.chains.iter().flatten() {
+        let dst_chain_id = &chain_scan.chain_id;
+
+        for (client_id, client_scan) in &chain_scan.clients {
+            let src_chain_id = client_scan.client.client_state.chain_id();
+
+            let dst_chain = match registry.get_or_spawn(dst_chain_id) {
+                Ok(handle) => handle,
+                Err(e) => {
+                    warn!(
+                        client = %client_id,
+                        dst_chain = %dst_chain_id,
+                        "startup refresh: failed to get dst chain handle: {e}"
+                    );
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            let src_chain = match registry.get_or_spawn(&src_chain_id) {
+                Ok(handle) => handle,
+                Err(e) => {
+                    warn!(
+                        client = %client_id,
+                        src_chain = %src_chain_id,
+                        "startup refresh: failed to get src chain handle: {e}"
+                    );
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            let mut client = ForeignClient::restore(
+                client_id.clone(),
+                dst_chain,
+                src_chain,
+            );
+
+            info!(
+                client = %client_id,
+                dst_chain = %dst_chain_id,
+                src_chain = %src_chain_id,
+                "startup refresh: attempting client refresh"
+            );
+
+            match client.refresh() {
+                Ok(Some(events)) => {
+                    info!(
+                        client = %client_id,
+                        dst_chain = %dst_chain_id,
+                        src_chain = %src_chain_id,
+                        num_events = events.len(),
+                        "startup refresh: client refreshed successfully"
+                    );
+                    refreshed += 1;
+                }
+                Ok(None) => {
+                    info!(
+                        client = %client_id,
+                        dst_chain = %dst_chain_id,
+                        src_chain = %src_chain_id,
+                        "startup refresh: client is already up to date"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        client = %client_id,
+                        dst_chain = %dst_chain_id,
+                        src_chain = %src_chain_id,
+                        "startup refresh: failed to refresh client: {e}"
+                    );
+                    failed += 1;
+                }
+            }
+        }
+    }
+
+    info!(
+        refreshed,
+        failed,
+        "proactive client refresh on startup complete"
+    );
+
+    if failed > 0 {
+        warn!(
+            failed,
+            "some clients failed to refresh on startup - monitor for expiry"
+        );
+    }
 }
 
 fn spawn_batch_workers<Chain: ChainHandle>(
@@ -755,6 +865,11 @@ fn health_check<Chain: ChainHandle>(config: &Config, registry: &mut Registry<Cha
     }
 }
 
+/// Maximum time to wait for a chain subscription to complete.
+/// If a chain's event source hangs during subscription setup (e.g., a stuck
+/// websocket connection), we skip it rather than blocking the entire supervisor.
+const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Subscribe to the events emitted by the chains the supervisor is connected to.
 #[instrument(name = "supervisor.init_subscriptions", level = "error", skip_all)]
 fn init_subscriptions<Chain: ChainHandle>(
@@ -766,30 +881,50 @@ fn init_subscriptions<Chain: ChainHandle>(
     let mut subscriptions = Vec::with_capacity(chains.len());
 
     for chain_config in chains {
-        info!("subscribing to events for chain {}", chain_config.id());
-        let chain = match registry.get_or_spawn(chain_config.id()) {
+        let chain_id = chain_config.id().clone();
+        info!("subscribing to events for chain {}", chain_id);
+
+        let chain = match registry.get_or_spawn(&chain_id) {
             Ok(chain) => chain,
             Err(e) => {
                 error!(
                     "failed to spawn chain runtime for {}: {}",
-                    chain_config.id(),
-                    e
+                    chain_id, e
                 );
 
                 continue;
             }
         };
 
-        match chain.subscribe() {
-            Ok(subscription) => {
-                info!("subscribed to events for chain {}", chain_config.id());
+        // Use a dedicated thread + bounded channel to enforce a timeout on
+        // chain.subscribe(). The subscribe call goes through the chain handle's
+        // crossbeam channel to the chain runtime, which could hang if the event
+        // source (e.g., websocket) is unresponsive.
+        let chain_clone = chain.clone();
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::Builder::new()
+            .name(format!("subscribe-{}", chain_id))
+            .spawn(move || {
+                let result = chain_clone.subscribe();
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn subscribe thread");
+
+        match rx.recv_timeout(SUBSCRIBE_TIMEOUT) {
+            Ok(Ok(subscription)) => {
+                info!("subscribed to events for chain {}", chain_id);
                 subscriptions.push((chain, subscription));
             }
-            Err(e) => error!(
+            Ok(Err(e)) => error!(
                 "failed to subscribe to events of {}: {}",
-                chain_config.id(),
-                e
+                chain_id, e
             ),
+            Err(_timeout) => {
+                error!(
+                    "timed out after {:?} waiting for subscription to chain {} - skipping this chain",
+                    SUBSCRIBE_TIMEOUT, chain_id
+                );
+            }
         }
     }
 

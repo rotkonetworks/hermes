@@ -69,6 +69,13 @@ impl BaseChainHandle {
         }
     }
 
+    /// Maximum time to wait for a response from the chain runtime.
+    /// This prevents any chain handle call from blocking forever if the
+    /// chain runtime hangs (e.g., due to a stuck RPC connection).
+    /// 5 minutes is generous enough for legitimate operations (including
+    /// transaction commits) while preventing infinite hangs.
+    const RECV_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(300);
+
     fn send<F, O>(&self, f: F) -> Result<O, Error>
     where
         F: FnOnce(ReplyTo<O>) -> ChainRequest,
@@ -83,7 +90,9 @@ impl BaseChainHandle {
             .send((span, input))
             .map_err(Error::send)?;
 
-        receiver.recv().map_err(Error::channel_receive)?
+        receiver
+            .recv_timeout(Self::RECV_TIMEOUT)
+            .map_err(Error::channel_receive_timeout)?
     }
 }
 

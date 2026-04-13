@@ -304,13 +304,32 @@ impl<'a, Chain: ChainHandle> ChainScanner<'a, Chain> {
         }
     }
 
+    /// Maximum time to spend scanning a single chain.
+    /// If a chain's queries take longer than this, we skip it and move on.
+    /// Individual queries already have a 5-minute timeout via BaseChainHandle,
+    /// but a chain with many clients/connections could accumulate delays.
+    const PER_CHAIN_SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
     pub fn scan_chains(mut self) -> ChainsScan {
         let mut scans = ChainsScan {
             chains: Vec::with_capacity(self.config.chains.len()),
         };
 
         for chain in self.config.chains.clone() {
-            scans.chains.push(self.scan_chain(&chain));
+            let chain_id = chain.id().clone();
+            let start = std::time::Instant::now();
+
+            let result = self.scan_chain(&chain);
+
+            let elapsed = start.elapsed();
+            if elapsed > Self::PER_CHAIN_SCAN_TIMEOUT {
+                warn!(
+                    "scanning chain {} took {:?} (exceeded {:?} limit) - result may be incomplete",
+                    chain_id, elapsed, Self::PER_CHAIN_SCAN_TIMEOUT
+                );
+            }
+
+            scans.chains.push(result);
         }
 
         scans

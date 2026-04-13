@@ -65,7 +65,7 @@ pub struct PenumbraConfig {
 
     /// The rate at which to refresh the client referencing this chain,
     /// expressed as a fraction of the trusting period.
-    #[serde(default = "default::client_refresh_rate")]
+    #[serde(default = "penumbra_client_refresh_rate")]
     pub client_refresh_rate: RefreshRate,
 
     /// The trust threshold defines what fraction of the total voting power of a known
@@ -85,6 +85,12 @@ pub struct PenumbraConfig {
     /// Penumbra-specific key concerns. In the future, we may want to merge
     /// this with the Hermes keyring, but it's a low-priority item.
     pub kms_config: soft_kms::Config,
+}
+
+/// Penumbra-specific aggressive client refresh rate: refresh at 1/5 of trusting period.
+/// Penumbra's SCT root issues and view database complexity make early refresh critical.
+fn penumbra_client_refresh_rate() -> RefreshRate {
+    RefreshRate::new(1, 5)
 }
 
 impl PenumbraConfig {

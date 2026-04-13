@@ -916,11 +916,34 @@ impl<DstChain: ChainHandle, SrcChain: ChainHandle> ForeignClient<DstChain, SrcCh
             .trusting_period()
             .mul_f64(refresh_rate.as_f64());
 
+        let trusting_period = client_state.trusting_period();
+
         match (elapsed, refresh_period) {
             (None, _) => Ok(None),
             (Some(elapsed), refresh_period) => {
+                // Warn when client is past 50% of its trusting period without refresh.
+                // This is a canary: if we see this warning, the client is at risk of expiry.
+                let half_trusting = trusting_period.mul_f64(0.5);
+                if elapsed > half_trusting {
+                    warn!(
+                        client = %self.id(),
+                        src_chain = %self.src_chain().id(),
+                        dst_chain = %self.dst_chain().id(),
+                        ?elapsed,
+                        ?trusting_period,
+                        ?refresh_period,
+                        "CLIENT EXPIRY RISK: client is past 50% of trusting period without refresh"
+                    );
+                }
+
                 if elapsed > refresh_period {
-                    info!(?elapsed, ?refresh_period, "client needs to be refreshed");
+                    info!(
+                        client = %self.id(),
+                        ?elapsed,
+                        ?refresh_period,
+                        ?trusting_period,
+                        "client needs to be refreshed"
+                    );
 
                     self.build_latest_update_client_and_send()
                         .map_or_else(Err, |ev| Ok(Some(ev)))
