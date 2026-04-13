@@ -65,6 +65,26 @@ impl super::LightClient<CosmosSdkChain> for LightClient {
         let Verified { target, supporting } =
             self.verify(trusted_height, target_height, client_state, now)?;
 
+        // If verify() returned an empty supporting set AND the client allows
+        // update after expiry, this is an unverified fallback for an expired
+        // client. Skip adjust_headers (which fetches trusted_height+1 that
+        // may be pruned) and build the header directly.
+        if supporting.is_empty() && client_state.allow_update_after_expiry() {
+            // For expired client recovery, use the target block's own next
+            // validator set as the trusted validators. The chain will validate.
+            let next_block = self.fetch(target_height.increment())?;
+            let header = TmHeader {
+                signed_header: target.signed_header,
+                validator_set: target.validators,
+                trusted_height,
+                trusted_validator_set: next_block.validators,
+            };
+            return Ok(Verified {
+                target: header,
+                supporting: vec![],
+            });
+        }
+
         // Omit the trusted header from the minimal supporting set, as it is not
         // needed when submitting the update client message.
         let supporting = {
