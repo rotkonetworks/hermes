@@ -106,25 +106,45 @@ impl super::LightClient<CosmosSdkChain> for LightClient {
         }
 
         let client = self.prepare_client(client_state, now)?;
-        let mut state = self.prepare_state(trusted_height)?;
 
-        // Verify the target header
-        let target = client
-            .verify_to_target(target_height.into(), &mut state)
-            .map_err(|e| Error::light_client_verification(self.chain_id.to_string(), e))?;
+        // Try the full verification path: prepare trusted state, then verify.
+        // If any step fails and the client allows update after expiry, fall
+        // back to fetching the target header without local verification.
+        // This handles both pruned RPCs (prepare_state fails) and expired
+        // trusting periods (verify_to_target fails).
+        let verified = (|| -> Result<Verified<LightBlock>, Error> {
+            let mut state = self.prepare_state(trusted_height)?;
+            let target = client
+                .verify_to_target(target_height.into(), &mut state)
+                .map_err(|e| Error::light_client_verification(self.chain_id.to_string(), e))?;
+            let target_trace = state.get_trace(target.height());
+            let supporting = target_trace
+                .into_iter()
+                .unique_by(LightBlock::height)
+                .sorted_by_key(LightBlock::height)
+                .filter(|lb| lb.height() != target.height())
+                .collect_vec();
+            Ok(Verified { target, supporting })
+        })();
 
-        // Collect the verification trace for the target block
-        let target_trace = state.get_trace(target.height());
-
-        // Compute the supporting set, sorted by ascending height, omitting the target header
-        let supporting = target_trace
-            .into_iter()
-            .unique_by(LightBlock::height)
-            .sorted_by_key(LightBlock::height)
-            .filter(|lb| lb.height() != target.height())
-            .collect_vec();
-
-        Ok(Verified { target, supporting })
+        match verified {
+            Ok(v) => Ok(v),
+            Err(e) if client_state.allow_update_after_expiry() => {
+                warn!(
+                    %trusted_height,
+                    %target_height,
+                    error = %e,
+                    "light client verification failed but client allows update after \
+                     expiry — fetching header without local verification (chain will validate)",
+                );
+                let target = self.fetch(target_height)?;
+                Ok(Verified {
+                    target,
+                    supporting: vec![],
+                })
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn fetch(&mut self, height: ICSHeight) -> Result<LightBlock, Error> {
