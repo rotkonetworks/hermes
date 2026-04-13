@@ -770,19 +770,32 @@ impl<DstChain: ChainHandle, SrcChain: ChainHandle> ForeignClient<DstChain, SrcCh
                 network_timestamp,
                 consensus_state_timestamp,
             } => {
-                error!(
-                    latest_height = %client_state.latest_height(),
-                    network_timestamp = %network_timestamp,
-                    consensus_state_timestamp = %consensus_state_timestamp,
-                    elapsed = ?elapsed,
-                    "client state is not valid: latest height is outside of trusting period!",
-                );
-                Err(ForeignClientError::expired_or_frozen(
-                    ExpiredOrFrozen::Expired,
-                    self.id().clone(),
-                    self.dst_chain.id(),
-                    format!("time elapsed since last client update: {elapsed:?}"),
-                ))
+                if client_state.allow_update_after_expiry() {
+                    // Client is expired but the chain allows updating it after expiry.
+                    // Log a warning but return Ok so the update can proceed.
+                    warn!(
+                        latest_height = %client_state.latest_height(),
+                        network_timestamp = %network_timestamp,
+                        consensus_state_timestamp = %consensus_state_timestamp,
+                        elapsed = ?elapsed,
+                        "client is expired but allow_update_after_expiry is set, proceeding with update",
+                    );
+                    Ok((client_state, Some(elapsed)))
+                } else {
+                    error!(
+                        latest_height = %client_state.latest_height(),
+                        network_timestamp = %network_timestamp,
+                        consensus_state_timestamp = %consensus_state_timestamp,
+                        elapsed = ?elapsed,
+                        "client state is not valid: latest height is outside of trusting period!",
+                    );
+                    Err(ForeignClientError::expired_or_frozen(
+                        ExpiredOrFrozen::Expired,
+                        self.id().clone(),
+                        self.dst_chain.id(),
+                        format!("time elapsed since last client update: {elapsed:?}"),
+                    ))
+                }
             }
             ConsensusStateTrusted::Trusted { elapsed } => Ok((client_state, Some(elapsed))),
         }

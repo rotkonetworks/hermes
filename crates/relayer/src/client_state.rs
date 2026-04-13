@@ -71,6 +71,12 @@ impl AnyClientState {
             Self::Tendermint(state) => state.expired(elapsed),
         }
     }
+
+    pub fn allow_update_after_expiry(&self) -> bool {
+        match self {
+            Self::Tendermint(state) => state.allow_update.after_expiry,
+        }
+    }
 }
 
 impl Protobuf<Any> for AnyClientState {}
