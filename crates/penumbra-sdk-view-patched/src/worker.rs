@@ -233,13 +233,44 @@ impl Worker {
 
             let height = block.height;
             if height != expected_height {
-                anyhow::bail!(
-                    "Wrong block height {} for latest sync height {}",
-                    height,
-                    expected_height.checked_sub(1).unwrap_or(0)
-                );
+                if height < expected_height {
+                    // Block is behind — another concurrent worker already processed it.
+                    tracing::debug!(
+                        block_height = height,
+                        expected_height,
+                        "skipping block already processed by concurrent worker"
+                    );
+                    continue;
+                }
+                // Block is ahead — the DB may have been advanced by a concurrent worker.
+                // Re-read the DB to see if we can adjust.
+                let db_height = self.storage.last_sync_height().await?;
+                let new_expected = db_height.map(|h| h + 1).unwrap_or(0);
+                if height >= new_expected && height <= new_expected + 1 {
+                    tracing::info!(
+                        block_height = height,
+                        old_expected = expected_height,
+                        new_expected,
+                        "adjusted expected height after concurrent DB advance"
+                    );
+                    expected_height = height;
+                } else if height < new_expected {
+                    tracing::debug!(
+                        block_height = height,
+                        db_expected = new_expected,
+                        "skipping block behind DB height"
+                    );
+                    continue;
+                } else {
+                    anyhow::bail!(
+                        "Wrong block height {} for latest sync height {} (DB at {:?})",
+                        height,
+                        expected_height.checked_sub(1).unwrap_or(0),
+                        db_height,
+                    );
+                }
             }
-            expected_height += 1;
+            expected_height = height + 1;
 
             // Wait for any in-progress transaction build to finish before
             // processing this block. The tx builder holds the write side of

@@ -619,7 +619,7 @@ impl ChainEndpoint for PenumbraChain {
 
         tracing::info!("starting view service sync");
 
-        let sync_height = rt
+        let sync_result = rt
             .block_on(async {
                 // Penumbra's compact block stream may return blocks out of order
                 // during initial sync, causing transient errors. Retry up to 5 times.
@@ -658,10 +658,21 @@ impl ChainEndpoint for PenumbraChain {
                     }
                 }
                 Err(anyhow::anyhow!("view service sync exhausted all retries"))
-            })
-            .map_err(|e: anyhow::Error| Error::temp_penumbra_error(e.to_string()))?;
+            });
 
-        tracing::info!(?sync_height, "view service sync complete");
+        let _sync_height = match sync_result {
+            Ok(h) => {
+                tracing::info!(sync_height = h, "view service sync complete");
+                h
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "view service initial sync failed, proceeding anyway — sync will continue in background"
+                );
+                0
+            }
+        };
 
         let ibc_client_grpc_client = rt
             .block_on(IbcClientQueryClient::connect(grpc_addr.clone()))

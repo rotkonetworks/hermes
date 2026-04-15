@@ -1258,6 +1258,16 @@ impl Storage {
             anyhow::anyhow!("invalid: tried to record empty block as genesis block")
         })?;
 
+        if height <= last_sync_height {
+            // Already recorded by a concurrent worker, skip.
+            tracing::debug!(
+                height,
+                last_sync_height,
+                "skipping empty block already recorded"
+            );
+            return Ok(());
+        }
+
         if height != last_sync_height + 1 {
             anyhow::bail!(
                 "Wrong block height {} for latest sync height {}",
@@ -1401,6 +1411,18 @@ impl Storage {
     ) -> anyhow::Result<()> {
         //Check that the incoming block height follows the latest recorded height
         let last_sync_height = self.last_sync_height().await?;
+
+        // If a concurrent worker already recorded this block, skip it.
+        if let Some(cur_height) = last_sync_height {
+            if filtered_block.height <= cur_height {
+                tracing::debug!(
+                    block_height = filtered_block.height,
+                    last_sync_height = cur_height,
+                    "skipping block already recorded by concurrent worker"
+                );
+                return Ok(());
+            }
+        }
 
         let correct_height = match last_sync_height {
             // Require that the new block follows the last one we scanned.
