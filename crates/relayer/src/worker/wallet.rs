@@ -1,6 +1,8 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{error_span, trace, warn};
+use tracing::{error, error_span, trace, warn};
 
 use crate::{
     chain::handle::ChainHandle,
@@ -8,15 +10,41 @@ use crate::{
     util::task::{spawn_background_task, Next, TaskError, TaskHandle},
 };
 
+/// After this many consecutive `chain.config()` failures, escalate the log
+/// level from WARN to ERROR so that monitoring can reliably detect a wedged
+/// chain handle. The handle's inter-thread channel can stay broken
+/// indefinitely without crashing hermes, but every retry will fail with the
+/// same "timeout when waiting for response over inter-thread channel" error;
+/// in that state, relaying through this chain is silently broken even though
+/// the process appears alive.
+const WEDGED_THRESHOLD: usize = 3;
+
 pub fn spawn_wallet_worker<Chain: ChainHandle>(chain: Chain) -> TaskHandle {
     let span = error_span!("wallet", chain = %chain.id());
+    let chain_id_str = chain.id().to_string();
+    let consecutive_failures = Arc::new(AtomicUsize::new(0));
 
     spawn_background_task(span, Some(Duration::from_secs(5)), move || {
         // Use Ignore instead of Fatal for config/key errors to survive connection issues.
         // The wallet worker should keep retrying rather than dying on transient failures.
-        let chain_config = chain
-            .config()
-            .map_err(|e| TaskError::Ignore(format!("failed to get chain config: {e}").into()))?;
+        // We track consecutive failures so monitoring can detect a wedged handle.
+        let chain_config = match chain.config() {
+            Ok(c) => {
+                consecutive_failures.store(0, Ordering::Relaxed);
+                c
+            }
+            Err(e) => {
+                let n = consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
+                let msg = format!("failed to get chain config: {e}");
+                if n >= WEDGED_THRESHOLD {
+                    error!(
+                        chain = %chain_id_str, consecutive = n,
+                        "wallet worker wedged: {msg} (relaying through this chain is broken until hermes is restarted)"
+                    );
+                }
+                return Err(TaskError::Ignore(msg.into()));
+            }
+        };
 
         let account = if let Some(addr) = chain_config.relayer_account() {
             addr
