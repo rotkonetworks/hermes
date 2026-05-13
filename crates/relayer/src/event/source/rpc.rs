@@ -225,21 +225,40 @@ impl EventSource {
                         }
                         break;
                     }
-                    Err(e) => match e.detail() {
-                        ErrorDetail::Rpc(_) if attempts < self.max_retries => {
-                            let delay = backoff.next().expect(
-                                "backoff has attempted to make more iterates than is expected",
+                    Err(e) => {
+                        // If the counterparty chain has pruned the block we're trying to read
+                        // (typical after a long downtime — e.g. the relayer's client expired
+                        // long enough ago that the chain has rotated past our last_fetched_height),
+                        // every retry of this height is wasted work. The error message contains
+                        // "lowest height is N" — fast-forward to N so we resume from live state.
+                        let err_str = e.to_string();
+                        if let Some(lowest) = parse_lowest_height(&err_str) {
+                            error!(
+                                %height,
+                                lowest,
+                                "chain has pruned this height; fast-forwarding to lowest available height to skip the gap"
                             );
-
-                            error!(%height, "failed to collect events: {e}, retrying in {delay:?}...");
-                            sleep(delay).await;
+                            self.last_fetched_height = BlockHeight::try_from(lowest)
+                                .unwrap_or(self.last_fetched_height);
+                            return Ok(batches);
                         }
 
-                        _ => {
-                            error!(%height, "failed to collect events after {attempts} attempts: {e}");
-                            break;
+                        match e.detail() {
+                            ErrorDetail::Rpc(_) if attempts < self.max_retries => {
+                                let delay = backoff.next().expect(
+                                    "backoff has attempted to make more iterates than is expected",
+                                );
+
+                                error!(%height, "failed to collect events: {e}, retrying in {delay:?}...");
+                                sleep(delay).await;
+                            }
+
+                            _ => {
+                                error!(%height, "failed to collect events after {attempts} attempts: {e}");
+                                break;
+                            }
                         }
-                    },
+                    }
                 }
             }
         }
@@ -433,3 +452,41 @@ impl Iterator for HeightRangeInclusive {
 }
 
 impl ExactSizeIterator for HeightRangeInclusive {}
+
+/// Extract the chain's earliest available block height from a pruned-block error.
+///
+/// CometBFT / Tendermint RPC nodes return a pruning error of the form:
+///   "Internal error: height 49091 is not available, lowest height is 20629119"
+///
+/// When this is detected, the relayer can fast-forward `last_fetched_height` to
+/// that lowest height instead of busy-looping through every pruned block in the
+/// gap (which can be millions of blocks deep after a long outage).
+fn parse_lowest_height(err: &str) -> Option<u64> {
+    let marker = "lowest height is ";
+    let start = err.find(marker)? + marker.len();
+    let rest = &err[start..];
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+#[cfg(test)]
+mod parse_lowest_height_tests {
+    use super::parse_lowest_height;
+
+    #[test]
+    fn extracts_height_from_pruned_error() {
+        let s = "RPC error: response error: Internal error: height 49091 is not available, lowest height is 20629119 (code: -32603)";
+        assert_eq!(parse_lowest_height(s), Some(20629119));
+    }
+
+    #[test]
+    fn returns_none_for_unrelated_error() {
+        assert_eq!(parse_lowest_height("connection refused"), None);
+        assert_eq!(parse_lowest_height(""), None);
+    }
+
+    #[test]
+    fn handles_height_at_end_of_string() {
+        assert_eq!(parse_lowest_height("lowest height is 12345"), Some(12345));
+    }
+}
