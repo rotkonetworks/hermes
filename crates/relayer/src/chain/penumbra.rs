@@ -413,28 +413,83 @@ impl PenumbraChain {
         tracked_msgs: TrackedMsgs,
         wait_for_commit: bool,
     ) -> Result<penumbra_sdk_transaction::txhash::TransactionId, Error> {
-        let tx = match self.build_penumbra_tx(tracked_msgs.clone()).await {
-            Ok(tx) => tx,
-            Err(e) => {
-                let err_str = e.to_string();
-                tracing::error!("error building penumbra transaction: {}", err_str);
-                if Self::is_stale_sct_error(&e) {
-                    self.reset_view_db_and_exit();
-                }
-                return Err(Error::from(e));
-            }
-        };
+        // Bounded in-process retry before the nuclear view-DB-wipe+restart.
+        //
+        // "not a valid SCT root" / "spend proof did not verify" is most often
+        // a TRANSIENT race: the chain advanced between proof generation and
+        // broadcast, so the anchor we committed to is a few blocks stale.
+        // That resolves on its own once the local view service catches up to
+        // chain head — a short sleep + rebuild fixes it. The old code instead
+        // called reset_view_db_and_exit() on the FIRST such error, wiping the
+        // view DB and force-restarting the process every time. When a packet
+        // is permanently undeliverable (e.g. expired counterparty client) it
+        // is retried every clear-interval, so every retry => full restart =>
+        // client-worker flap => spurious "0 client workers" alerts forever.
+        //
+        // Only a PERSISTENT failure across several resync-and-retry attempts
+        // indicates a genuinely stale/corrupt view DB that needs the wipe.
+        const MAX_SCT_RETRIES: usize = 4;
+        const SCT_RETRY_BACKOFF: Duration = Duration::from_secs(4);
 
-        let mut view_client = self.view_client.lock().await.clone();
-        let penumbra_txid = match tx::submit_transaction(&mut view_client, tx, wait_for_commit).await {
-            Ok(id) => id,
-            Err(e) => {
-                let err_str = e.to_string();
-                tracing::error!("error submitting transaction: {}", err_str);
-                if Self::is_stale_sct_error(&e) {
-                    self.reset_view_db_and_exit();
+        let mut attempt = 0usize;
+        let penumbra_txid = loop {
+            attempt += 1;
+
+            let tx = match self.build_penumbra_tx(tracked_msgs.clone()).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if Self::is_stale_sct_error(&e) && attempt < MAX_SCT_RETRIES {
+                        tracing::warn!(
+                            attempt,
+                            max = MAX_SCT_RETRIES,
+                            "transient SCT mismatch while building tx ({}); \
+                             letting view service catch up, then retrying",
+                            err_str
+                        );
+                        tokio::time::sleep(SCT_RETRY_BACKOFF).await;
+                        continue;
+                    }
+                    tracing::error!("error building penumbra transaction: {}", err_str);
+                    if Self::is_stale_sct_error(&e) {
+                        tracing::error!(
+                            attempts = attempt,
+                            "SCT error persisted across retries — view DB is \
+                             genuinely stale/corrupt, resetting and restarting"
+                        );
+                        self.reset_view_db_and_exit();
+                    }
+                    return Err(Error::from(e));
                 }
-                return Err(Error::from(e));
+            };
+
+            let mut view_client = self.view_client.lock().await.clone();
+            match tx::submit_transaction(&mut view_client, tx, wait_for_commit).await {
+                Ok(id) => break id,
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if Self::is_stale_sct_error(&e) && attempt < MAX_SCT_RETRIES {
+                        tracing::warn!(
+                            attempt,
+                            max = MAX_SCT_RETRIES,
+                            "transient SCT mismatch while submitting tx ({}); \
+                             letting view service catch up, then retrying",
+                            err_str
+                        );
+                        tokio::time::sleep(SCT_RETRY_BACKOFF).await;
+                        continue;
+                    }
+                    tracing::error!("error submitting transaction: {}", err_str);
+                    if Self::is_stale_sct_error(&e) {
+                        tracing::error!(
+                            attempts = attempt,
+                            "SCT error persisted across retries — view DB is \
+                             genuinely stale/corrupt, resetting and restarting"
+                        );
+                        self.reset_view_db_and_exit();
+                    }
+                    return Err(Error::from(e));
+                }
             }
         };
 
