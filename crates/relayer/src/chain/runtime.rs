@@ -139,6 +139,20 @@ where
     fn run(mut self) -> Result<(), Error> {
         let chain_id = ChainEndpoint::id(&self.chain).to_string();
 
+        // Consecutive SCT-corruption panics. The error path
+        // (send_messages_in_penumbratx) gates the view-DB wipe behind
+        // bounded retries; the panic path must do the equivalent or the
+        // restart-flap simply returns via the "commitment must be
+        // witnessed" panic variant instead of the error variant (Penumbra
+        // Labs review consensus: reviewer 4). A single SCT panic is
+        // usually a transient witnessing race — catch_unwind already lets
+        // the runtime thread survive and the next request rebuilds fresh,
+        // so tolerate it. Only a PERSISTENT run of them means the view DB
+        // is genuinely corrupt and warrants the wipe+exit. Reset on any
+        // clean dispatch.
+        const MAX_CONSECUTIVE_SCT_PANICS: usize = 3;
+        let mut consecutive_sct_panics: usize = 0;
+
         loop {
             channel::select! {
                 recv(self.request_receiver) -> event => {
@@ -170,7 +184,10 @@ where
                     }));
 
                     match result {
-                        Ok(Ok(())) => {},
+                        Ok(Ok(())) => {
+                            // Clean dispatch — any prior SCT panic was transient.
+                            consecutive_sct_panics = 0;
+                        },
                         Ok(Err(e)) => {
                             error!("[{}] chain runtime dispatch error: {}", chain_id, e);
                             // The handler already sent an error reply via reply_to (or
@@ -192,16 +209,30 @@ where
                             // and every future tx attempt will panic the same way.
                             // Wipe the view DB and exit so systemd restarts us fresh.
                             if is_stale_sct_message(&msg) {
+                                consecutive_sct_panics += 1;
+                                if consecutive_sct_panics >= MAX_CONSECUTIVE_SCT_PANICS {
+                                    error!(
+                                        "[{}] SCT corruption panic persisted ({}/{}) — view DB \
+                                         genuinely corrupt, resetting and restarting: {}",
+                                        chain_id, consecutive_sct_panics,
+                                        MAX_CONSECUTIVE_SCT_PANICS, msg
+                                    );
+                                    let config = self.chain.config();
+                                    let dir = match &config {
+                                        ChainConfig::Penumbra(cfg) => cfg.view_service_storage_dir.as_deref(),
+                                        _ => None,
+                                    };
+                                    reset_penumbra_view_db_and_exit(dir);
+                                }
+                                // Transient: catch_unwind already kept the runtime
+                                // thread alive; the next request rebuilds against
+                                // fresh SCT state. Do NOT wipe+exit on a lone panic.
                                 error!(
-                                    "[{}] SCT corruption panic detected, resetting view DB: {}",
-                                    chain_id, msg
+                                    "[{}] transient SCT panic {}/{}, continuing without \
+                                     restart (next request rebuilds fresh): {}",
+                                    chain_id, consecutive_sct_panics,
+                                    MAX_CONSECUTIVE_SCT_PANICS, msg
                                 );
-                                let config = self.chain.config();
-                                let dir = match &config {
-                                    ChainConfig::Penumbra(cfg) => cfg.view_service_storage_dir.as_deref(),
-                                    _ => None,
-                                };
-                                reset_penumbra_view_db_and_exit(dir);
                             }
 
                             error!(

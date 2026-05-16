@@ -428,8 +428,14 @@ impl PenumbraChain {
         //
         // Only a PERSISTENT failure across several resync-and-retry attempts
         // indicates a genuinely stale/corrupt view DB that needs the wipe.
-        const MAX_SCT_RETRIES: usize = 4;
-        const SCT_RETRY_BACKOFF: Duration = Duration::from_secs(4);
+        // Backoff must exceed BOTH one Penumbra block interval (~5-6s, so the
+        // view service can observe the newer block and refresh the anchor)
+        // AND the patched view worker's own 10s self-restart window (it bails
+        // its sync stream on a "Wrong block height" and sleeps 10s before
+        // reopening). 6s × 6 ≈ 36s total budget clears both. (Penumbra Labs
+        // review consensus: reviewers 1 & 3.)
+        const MAX_SCT_RETRIES: usize = 6;
+        const SCT_RETRY_BACKOFF: Duration = Duration::from_secs(6);
 
         let mut attempt = 0usize;
         let penumbra_txid = loop {
