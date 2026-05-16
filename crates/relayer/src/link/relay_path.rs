@@ -1,7 +1,9 @@
 use alloc::collections::BTreeMap as HashMap;
 use alloc::collections::VecDeque;
 use ibc_relayer_types::core::ics04_channel::packet::Sequence;
+use std::collections::HashSet;
 use std::ops::Sub;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ibc_proto::google::protobuf::Any;
@@ -49,7 +51,7 @@ use crate::config::types::ics20_field_size_limit::Ics20FieldSizeLimit;
 use crate::config::types::ics20_field_size_limit::ValidationResult;
 use crate::event::source::EventBatch;
 use crate::event::IbcEventWithHeight;
-use crate::foreign_client::{ForeignClient, ForeignClientError};
+use crate::foreign_client::{ForeignClient, ForeignClientError, HasExpiredOrFrozenError};
 use crate::link::error::{self, LinkError};
 use crate::link::operational_data::{
     OperationalData, OperationalDataTarget, TrackedEvents, TransitMessage,
@@ -119,6 +121,24 @@ pub struct RelayPath<ChainA: ChainHandle, ChainB: ChainHandle> {
     pub max_memo_size: Ics20FieldSizeLimit,
     pub max_receiver_size: Ics20FieldSizeLimit,
     pub exclude_src_sequences: Vec<Sequence>,
+
+    // Runtime auto-quarantine for permanently-undeliverable packets.
+    //
+    // When relaying a packet fails because the DESTINATION IBC client is
+    // expired/frozen (recoverable only by external governance, not by the
+    // relayer), retrying it every clear-interval is pure waste — and on
+    // Penumbra it also drives the SCT-race / view-DB-wipe restart-flap
+    // that pages operators daily (Penumbra Labs review consensus:
+    // reviewer 2 — this is the true root cause; the doomed packet never
+    // even reaches the SCT retry path, it fails earlier in
+    // build_update_client_on_dst). Sequences added here are filtered out
+    // of scheduling exactly like the config-provided exclude_src_sequences,
+    // so the doomed-retry loop stops at its source. Separate from the
+    // static config list so operator intent and runtime auto-quarantine
+    // stay distinct. Cleared on process restart (re-evaluated fresh);
+    // once the counterparty client is gov-recovered the packets schedule
+    // again naturally after a restart.
+    quarantined_sequences: Arc<Mutex<HashSet<Sequence>>>,
 }
 
 impl<ChainA: ChainHandle, ChainB: ChainHandle> RelayPath<ChainA, ChainB> {
@@ -169,7 +189,55 @@ impl<ChainA: ChainHandle, ChainB: ChainHandle> RelayPath<ChainA, ChainB> {
             max_receiver_size: link_parameters.max_receiver_size,
 
             exclude_src_sequences: link_parameters.exclude_src_sequences,
+            quarantined_sequences: Arc::new(Mutex::new(HashSet::new())),
         })
+    }
+
+    /// True if `seq` should be skipped: either operator-configured in
+    /// `exclude_src_sequences` or runtime-quarantined after a permanent
+    /// (expired/frozen destination client) relay failure.
+    fn is_excluded_sequence(&self, seq: &Sequence) -> bool {
+        if self.exclude_src_sequences.contains(seq) {
+            return true;
+        }
+        self.quarantined_sequences
+            .lock()
+            .map(|q| q.contains(seq))
+            .unwrap_or(false)
+    }
+
+    /// Quarantine the sequences carried by `odata` after a permanent relay
+    /// failure (destination client expired/frozen). Idempotent; logs only
+    /// the sequences newly added so a stuck channel doesn't spam logs.
+    fn quarantine_operational_data(&self, odata: &OperationalData) {
+        let mut newly = Vec::new();
+        if let Ok(mut q) = self.quarantined_sequences.lock() {
+            for tm in &odata.batch {
+                let seq = match &tm.event_with_height.event {
+                    IbcEvent::SendPacket(e) => Some(e.packet.sequence),
+                    IbcEvent::WriteAcknowledgement(e) => Some(e.packet.sequence),
+                    IbcEvent::TimeoutPacket(e) => Some(e.packet.sequence),
+                    _ => None,
+                };
+                if let Some(s) = seq {
+                    if q.insert(s) {
+                        newly.push(s);
+                    }
+                }
+            }
+        }
+        if !newly.is_empty() {
+            let (dst, src, channel_id, port_id) = self.target_info(odata.target);
+            warn!(
+                %src, %dst, %channel_id, %port_id,
+                sequences = ?newly,
+                "quarantining undeliverable packets: destination client is \
+                 expired/frozen (needs governance recovery). These will be \
+                 skipped until hermes restarts after the client is restored, \
+                 instead of being retried every clear-interval (which drives \
+                 the SCT view-DB restart-flap)."
+            );
+        }
     }
 
     pub fn src_chain(&self) -> &ChainA {
@@ -785,6 +853,19 @@ impl<ChainA: ChainHandle, ChainB: ChainHandle> RelayPath<ChainA, ChainB> {
                     }
                 }
                 Err(e) => {
+                    // If this failed because the destination client is
+                    // expired/frozen, the packet is permanently undeliverable
+                    // until external governance recovers the client. Quarantine
+                    // its sequences so the scheduler stops re-queuing it every
+                    // clear-interval (which, on Penumbra, drives the SCT
+                    // view-DB-wipe restart-flap). Then stop retrying this odata
+                    // now — returning empty rather than Err so the relay worker
+                    // backs off cleanly instead of treating it as a hard error
+                    // to escalate.
+                    if e.is_expired_or_frozen_error() {
+                        self.quarantine_operational_data(&odata);
+                        return Ok(S::Reply::empty());
+                    }
                     // Unrecoverable error, propagate up the stack
                     return Err(e);
                 }
@@ -1224,7 +1305,7 @@ impl<ChainA: ChainHandle, ChainB: ChainHandle> RelayPath<ChainA, ChainB> {
         // Retain only sequences which should not be filtered out
         let raw_sequences: Vec<Sequence> = sequences
             .into_iter()
-            .filter(|sequence| !self.exclude_src_sequences.contains(sequence))
+            .filter(|sequence| !self.is_excluded_sequence(sequence))
             .collect();
 
         let sequences = &raw_sequences[..raw_sequences.len().min(clear_limit)];
@@ -1301,7 +1382,7 @@ impl<ChainA: ChainHandle, ChainB: ChainHandle> RelayPath<ChainA, ChainB> {
         // Retain only sequences which should not be filtered out
         let raw_sequences: Vec<Sequence> = sequences
             .into_iter()
-            .filter(|sequence| !self.exclude_src_sequences.contains(sequence))
+            .filter(|sequence| !self.is_excluded_sequence(sequence))
             .collect();
 
         let sequences = &raw_sequences[..raw_sequences.len().min(clear_limit)];
