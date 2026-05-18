@@ -36,7 +36,7 @@ use ibc_relayer_types::{
 
 use crate::{
     account::Balance,
-    chain::penumbra::{is_stale_sct_message, reset_penumbra_view_db_and_exit},
+    chain::penumbra::is_stale_sct_message,
     client_state::{AnyClientState, IdentifiedAnyClientState},
     config::ChainConfig,
     connection::ConnectionMsgType,
@@ -139,18 +139,12 @@ where
     fn run(mut self) -> Result<(), Error> {
         let chain_id = ChainEndpoint::id(&self.chain).to_string();
 
-        // Consecutive SCT-corruption panics. The error path
-        // (send_messages_in_penumbratx) gates the view-DB wipe behind
-        // bounded retries; the panic path must do the equivalent or the
-        // restart-flap simply returns via the "commitment must be
-        // witnessed" panic variant instead of the error variant (Penumbra
-        // Labs review consensus: reviewer 4). A single SCT panic is
-        // usually a transient witnessing race — catch_unwind already lets
-        // the runtime thread survive and the next request rebuilds fresh,
-        // so tolerate it. Only a PERSISTENT run of them means the view DB
-        // is genuinely corrupt and warrants the wipe+exit. Reset on any
-        // clean dispatch.
-        const MAX_CONSECUTIVE_SCT_PANICS: usize = 3;
+        // Diagnostic counter only. SCT panics NEVER wipe the view DB or
+        // process::exit anymore (that auto-recovery was a regression that
+        // turned a single doomed op into a relayer-wide restart-flap).
+        // catch_unwind keeps the runtime thread alive; the next request
+        // rebuilds against fresh SCT state. We just count consecutive
+        // panics for log visibility and reset on any clean dispatch.
         let mut consecutive_sct_panics: usize = 0;
 
         loop {
@@ -210,28 +204,27 @@ where
                             // Wipe the view DB and exit so systemd restarts us fresh.
                             if is_stale_sct_message(&msg) {
                                 consecutive_sct_panics += 1;
-                                if consecutive_sct_panics >= MAX_CONSECUTIVE_SCT_PANICS {
-                                    error!(
-                                        "[{}] SCT corruption panic persisted ({}/{}) — view DB \
-                                         genuinely corrupt, resetting and restarting: {}",
-                                        chain_id, consecutive_sct_panics,
-                                        MAX_CONSECUTIVE_SCT_PANICS, msg
-                                    );
-                                    let config = self.chain.config();
-                                    let dir = match &config {
-                                        ChainConfig::Penumbra(cfg) => cfg.view_service_storage_dir.as_deref(),
-                                        _ => None,
-                                    };
-                                    reset_penumbra_view_db_and_exit(dir);
-                                }
-                                // Transient: catch_unwind already kept the runtime
-                                // thread alive; the next request rebuilds against
-                                // fresh SCT state. Do NOT wipe+exit on a lone panic.
+                                // NEVER process::exit here. catch_unwind has
+                                // already kept the runtime thread alive; the
+                                // next request rebuilds against fresh SCT
+                                // state. A doomed op (cosmoshub client refresh
+                                // whose large header always out-races the SCT
+                                // anchor) must not be able to wipe the view DB
+                                // and restart the process, which takes healthy
+                                // relay (noble) down with it and produces the
+                                // daily restart-flap page. If a client truly
+                                // cannot be updated there is nothing the
+                                // relayer can do — log and continue; recovery
+                                // is a governance action, not a relayer
+                                // restart. A genuinely corrupt view DB still
+                                // surfaces as persistent errors and can be
+                                // reset out-of-band.
                                 error!(
-                                    "[{}] transient SCT panic {}/{}, continuing without \
-                                     restart (next request rebuilds fresh): {}",
-                                    chain_id, consecutive_sct_panics,
-                                    MAX_CONSECUTIVE_SCT_PANICS, msg
+                                    "[{}] SCT panic #{} — continuing without \
+                                     wipe/restart (next request rebuilds \
+                                     fresh; if this is a client refresh the \
+                                     client needs governance recovery): {}",
+                                    chain_id, consecutive_sct_panics, msg
                                 );
                             }
 
