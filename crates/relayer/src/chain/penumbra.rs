@@ -403,10 +403,15 @@ impl PenumbraChain {
         is_stale_sct_message(&format!("{:?}", err))
     }
 
-    fn reset_view_db_and_exit(&self) -> ! {
-        let dir = self.config.view_service_storage_dir.as_deref();
-        reset_penumbra_view_db_and_exit(dir);
-    }
+    // NOTE: the former `reset_view_db_and_exit()` helper (wipe view DB +
+    // std::process::exit) was deliberately removed. Process-exiting on an
+    // SCT failure is never correct here: a single doomed op (e.g. the
+    // cosmoshub client-refresh whose oversized header always out-races the
+    // SCT anchor) would restart-flap the whole relayer forever and take
+    // healthy relay (noble) down with it. SCT failures now log and return
+    // Err so only the affected worker backs off. The `pub
+    // reset_penumbra_view_db_and_exit` is retained for explicit
+    // out-of-band/manual recovery only; nothing auto-invokes it.
 
     async fn send_messages_in_penumbratx(
         &mut self,
@@ -458,12 +463,25 @@ impl PenumbraChain {
                     }
                     tracing::error!("error building penumbra transaction: {}", err_str);
                     if Self::is_stale_sct_error(&e) {
+                        // DO NOT wipe the view DB and process::exit here. A
+                        // doomed op (e.g. the cosmoshub client-refresh whose
+                        // large header always out-races the SCT anchor) would
+                        // otherwise restart-flap forever and take down healthy
+                        // relay (noble) with it. If a client genuinely cannot
+                        // be updated, there is nothing the relayer can do —
+                        // log it and return the error so THIS worker backs off
+                        // while the process stays up. (The aggressive
+                        // wipe+exit auto-recovery was a regression; the
+                        // pre-48864e0d behavior — log & continue — was
+                        // correct. A genuinely corrupt view DB still surfaces
+                        // as persistent errors and can be reset out-of-band.)
                         tracing::error!(
                             attempts = attempt,
-                            "SCT error persisted across retries — view DB is \
-                             genuinely stale/corrupt, resetting and restarting"
+                            "SCT error persisted across retries — skipping this \
+                             operation and continuing (NOT wiping view DB / \
+                             NOT restarting). If this is a client refresh, the \
+                             client likely needs governance recovery."
                         );
-                        self.reset_view_db_and_exit();
                     }
                     return Err(Error::from(e));
                 }
@@ -487,12 +505,16 @@ impl PenumbraChain {
                     }
                     tracing::error!("error submitting transaction: {}", err_str);
                     if Self::is_stale_sct_error(&e) {
+                        // See rationale above: never process::exit on a doomed
+                        // SCT op. Log and return Err so this worker backs off
+                        // while the relayer (and noble relay) stays up.
                         tracing::error!(
                             attempts = attempt,
-                            "SCT error persisted across retries — view DB is \
-                             genuinely stale/corrupt, resetting and restarting"
+                            "SCT error persisted across retries — skipping this \
+                             operation and continuing (NOT wiping view DB / \
+                             NOT restarting). If this is a client refresh, the \
+                             client likely needs governance recovery."
                         );
-                        self.reset_view_db_and_exit();
                     }
                     return Err(Error::from(e));
                 }
