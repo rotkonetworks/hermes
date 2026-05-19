@@ -418,108 +418,38 @@ impl PenumbraChain {
         tracked_msgs: TrackedMsgs,
         wait_for_commit: bool,
     ) -> Result<penumbra_sdk_transaction::txhash::TransactionId, Error> {
-        // Bounded in-process retry before the nuclear view-DB-wipe+restart.
-        //
-        // "not a valid SCT root" / "spend proof did not verify" is most often
-        // a TRANSIENT race: the chain advanced between proof generation and
-        // broadcast, so the anchor we committed to is a few blocks stale.
-        // That resolves on its own once the local view service catches up to
-        // chain head — a short sleep + rebuild fixes it. The old code instead
-        // called reset_view_db_and_exit() on the FIRST such error, wiping the
-        // view DB and force-restarting the process every time. When a packet
-        // is permanently undeliverable (e.g. expired counterparty client) it
-        // is retried every clear-interval, so every retry => full restart =>
-        // client-worker flap => spurious "0 client workers" alerts forever.
-        //
-        // Only a PERSISTENT failure across several resync-and-retry attempts
-        // indicates a genuinely stale/corrupt view DB that needs the wipe.
-        // Backoff must exceed BOTH one Penumbra block interval (~5-6s, so the
-        // view service can observe the newer block and refresh the anchor)
-        // AND the patched view worker's own 10s self-restart window (it bails
-        // its sync stream on a "Wrong block height" and sleeps 10s before
-        // reopening). 6s × 6 ≈ 36s total budget clears both. (Penumbra Labs
-        // review consensus: reviewers 1 & 3.)
-        const MAX_SCT_RETRIES: usize = 6;
-        const SCT_RETRY_BACKOFF: Duration = Duration::from_secs(6);
+        // P0 anchor-latency fix: a single locked build+submit. The SCT
+        // anchor is bound inside build_transaction's witness step and is a
+        // public input to the spend proof, so it cannot be swapped without
+        // re-proving — the old MAX_SCT_RETRIES re-plan/re-prove backoff loop
+        // could never converge for a high-latency tx (it just re-staled the
+        // anchor every attempt) and is removed. build_and_submit_penumbra_tx
+        // holds tx_build_lock across plan->build->submit with submit issued
+        // immediately after build, minimizing the anchor->check_stateful
+        // window. Never wipes the view DB / never process::exits.
+        let mut view_client = self.view_client.lock().await.clone();
+        let fvk = self.config.kms_config.spend_key.full_viewing_key().clone();
 
-        let mut attempt = 0usize;
-        let penumbra_txid = loop {
-            attempt += 1;
-
-            let tx = match self.build_penumbra_tx(tracked_msgs.clone()).await {
-                Ok(tx) => tx,
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if Self::is_stale_sct_error(&e) && attempt < MAX_SCT_RETRIES {
-                        tracing::warn!(
-                            attempt,
-                            max = MAX_SCT_RETRIES,
-                            "transient SCT mismatch while building tx ({}); \
-                             letting view service catch up, then retrying",
-                            err_str
-                        );
-                        tokio::time::sleep(SCT_RETRY_BACKOFF).await;
-                        continue;
-                    }
-                    tracing::error!("error building penumbra transaction: {}", err_str);
-                    if Self::is_stale_sct_error(&e) {
-                        // DO NOT wipe the view DB and process::exit here. A
-                        // doomed op (e.g. the cosmoshub client-refresh whose
-                        // large header always out-races the SCT anchor) would
-                        // otherwise restart-flap forever and take down healthy
-                        // relay (noble) with it. If a client genuinely cannot
-                        // be updated, there is nothing the relayer can do —
-                        // log it and return the error so THIS worker backs off
-                        // while the process stays up. (The aggressive
-                        // wipe+exit auto-recovery was a regression; the
-                        // pre-48864e0d behavior — log & continue — was
-                        // correct. A genuinely corrupt view DB still surfaces
-                        // as persistent errors and can be reset out-of-band.)
-                        tracing::error!(
-                            attempts = attempt,
-                            "SCT error persisted across retries — skipping this \
-                             operation and continuing (NOT wiping view DB / \
-                             NOT restarting). If this is a client refresh, the \
-                             client likely needs governance recovery."
-                        );
-                    }
-                    return Err(Error::from(e));
-                }
-            };
-
-            let mut view_client = self.view_client.lock().await.clone();
-            match tx::submit_transaction(&mut view_client, tx, wait_for_commit).await {
-                Ok(id) => break id,
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if Self::is_stale_sct_error(&e) && attempt < MAX_SCT_RETRIES {
-                        tracing::warn!(
-                            attempt,
-                            max = MAX_SCT_RETRIES,
-                            "transient SCT mismatch while submitting tx ({}); \
-                             letting view service catch up, then retrying",
-                            err_str
-                        );
-                        tokio::time::sleep(SCT_RETRY_BACKOFF).await;
-                        continue;
-                    }
-                    tracing::error!("error submitting transaction: {}", err_str);
-                    if Self::is_stale_sct_error(&e) {
-                        // See rationale above: never process::exit on a doomed
-                        // SCT op. Log and return Err so this worker backs off
-                        // while the relayer (and noble relay) stays up.
-                        tracing::error!(
-                            attempts = attempt,
-                            "SCT error persisted across retries — skipping this \
-                             operation and continuing (NOT wiping view DB / \
-                             NOT restarting). If this is a client refresh, the \
-                             client likely needs governance recovery."
-                        );
-                    }
-                    return Err(Error::from(e));
-                }
+        let penumbra_txid = tx::build_and_submit_penumbra_tx(
+            &mut view_client,
+            &mut self.custody_client,
+            &fvk,
+            tracked_msgs,
+            &self.tx_build_lock,
+            wait_for_commit,
+        )
+        .await
+        .map_err(|e| {
+            if Self::is_stale_sct_error(&e) {
+                tracing::error!(
+                    "SCT anchor stale at check_stateful even with a minimized \
+                     locked build->submit window — the chain advanced past the \
+                     captured anchor faster than prove+broadcast. NOT wiping \
+                     view DB / NOT restarting; this worker backs off."
+                );
             }
-        };
+            Error::from(e)
+        })?;
 
         // wait for two blocks of confirmation to be sure that the potentially load-balanced endpoints are synced
         if wait_for_commit {

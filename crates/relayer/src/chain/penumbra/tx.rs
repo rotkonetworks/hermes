@@ -201,3 +201,112 @@ pub async fn submit_transaction(
 
     Ok(id)
 }
+
+/// P0 anchor-latency fix.
+///
+/// Plan -> build (witness+prove) -> submit, executed with `tx_build_lock`
+/// held *continuously* across all three, and submit issued *immediately*
+/// after build with nothing in between (no lock release, no re-plan, no
+/// re-prove, no second view_client round-trip).
+///
+/// Rationale: a Penumbra spend proof's public inputs include the SCT
+/// anchor, so a stale anchor CANNOT be repaired by re-witnessing without
+/// re-proving. The only sound mitigation is to (a) minimize the wall-clock
+/// between anchor capture (inside `build_transaction`'s witness step) and
+/// the chain's `check_stateful`, and (b) stop the local sync worker from
+/// forgetting the witnessed note mid-flight. Holding the lock across
+/// build+submit does both. Deliberately re-staling via a backoff/rebuild
+/// loop (the old MAX_SCT_RETRIES path) can never converge for a
+/// high-latency tx and is therefore removed.
+pub async fn build_and_submit_penumbra_tx(
+    view_client: &mut ViewServiceClient<BoxGrpcService>,
+    custody_client: &mut CustodyServiceClient<BoxGrpcService>,
+    fvk: &FullViewingKey,
+    tracked_msgs: TrackedMsgs,
+    tx_build_lock: &Arc<RwLock<()>>,
+    await_commit: bool,
+) -> Result<TransactionId, PenumbraError> {
+    let gas_prices: penumbra_sdk_fee::GasPrices = view_client
+        .gas_prices(GasPricesRequest {})
+        .await
+        .map_err(|e| PenumbraError::ViewService {
+            operation: "gas_prices",
+            source: anyhow::anyhow!("{}", e),
+        })?
+        .into_inner()
+        .gas_prices
+        .ok_or(PenumbraError::GasPricesUnavailable)?
+        .try_into()
+        .map_err(|e: anyhow::Error| PenumbraError::TxBuild {
+            reason: format!("failed to parse gas prices: {}", e),
+        })?;
+
+    let fee_tier = FeeTier::default();
+
+    let ibc_actions: Vec<IbcRelay> = tracked_msgs
+        .msgs
+        .iter()
+        .map(|msg| {
+            let raw = ProtoIbcRelay {
+                raw_action: Some(pbjson_types::Any {
+                    type_url: msg.type_url.clone(),
+                    value: msg.value.clone().into(),
+                }),
+            };
+            IbcRelay::try_from(raw).map_err(|e| PenumbraError::IbcRelayConversion(e))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for attempt in 1..=MAX_WITNESS_RETRIES {
+        // Hold the sync-pause across plan + witness + build + SUBMIT.
+        // Do NOT drop before submit: the anchor is captured during
+        // build_transaction's witness step; releasing here lets the local
+        // view / chain advance and stales the anchor before check_stateful.
+        let _sync_pause = tx_build_lock.write().await;
+
+        let mut planner = Planner::new(OsRng);
+        planner.set_gas_prices(gas_prices.clone()).set_fee_tier(fee_tier);
+        for action in &ibc_actions {
+            planner.ibc_action(action.clone());
+        }
+
+        let plan = planner
+            .plan(view_client, AddressIndex::new(0))
+            .await
+            .map_err(|e| PenumbraError::TxBuild {
+                reason: format!("planner failed: {}", e),
+            })?;
+
+        match penumbra_sdk_wallet::build_transaction(fvk, view_client, custody_client, plan).await {
+            Ok(tx) => {
+                // Submit immediately, still holding the lock. Smallest
+                // possible anchor -> check_stateful window. No re-plan,
+                // no re-prove, no backoff between build and submit.
+                let res = submit_transaction(view_client, tx, await_commit).await;
+                drop(_sync_pause);
+                return res;
+            }
+            Err(e) => {
+                let err_msg = e.to_string();
+                drop(_sync_pause);
+                if (err_msg.contains("Note commitment missing")
+                    || err_msg.contains("commitment must be witnessed"))
+                    && attempt < MAX_WITNESS_RETRIES
+                {
+                    tracing::warn!(
+                        attempt,
+                        "witness failed for selected note, retrying with fresh \
+                         notes after sync catches up"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+                return Err(PenumbraError::TxBuild {
+                    reason: format!("build_transaction failed: {}", e),
+                });
+            }
+        }
+    }
+
+    unreachable!("loop always returns")
+}
