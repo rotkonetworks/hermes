@@ -20,7 +20,7 @@ use penumbra_sdk_proto::core::component::ibc::v1::IbcRelay as ProtoIbcRelay;
 use penumbra_sdk_proto::custody::v1::custody_service_client::CustodyServiceClient;
 use penumbra_sdk_proto::core::component::sct::v1::query_service_client::QueryServiceClient as SctQueryServiceClient;
 use penumbra_sdk_proto::core::component::sct::v1::AnchorByHeightRequest;
-use penumbra_sdk_tct::Root as TctRoot;
+use penumbra_sdk_proto::crypto::tct::v1::MerkleRoot as ProtoMerkleRoot;
 use penumbra_sdk_proto::view::v1::{
     broadcast_transaction_response::Status as BroadcastStatus,
     view_service_client::ViewServiceClient, GasPricesRequest,
@@ -312,6 +312,8 @@ pub async fn build_and_submit_penumbra_tx(
                     .map(|s| s.full_sync_height)
                     .unwrap_or(0);
 
+                let want_inner: Vec<u8> = ProtoMerkleRoot::from(tx.anchor.clone()).inner;
+
                 let mut canonical = false;
                 match SctQueryServiceClient::connect(grpc_url.clone()).await {
                     Ok(mut sct) => {
@@ -323,11 +325,9 @@ pub async fn build_and_submit_penumbra_tx(
                             {
                                 Ok(resp) => {
                                     if let Some(mr) = resp.into_inner().anchor {
-                                        if let Ok(chain_root) = TctRoot::try_from(mr) {
-                                            if chain_root == tx.anchor {
-                                                canonical = true;
-                                                break;
-                                            }
+                                        if mr.inner == want_inner {
+                                            canonical = true;
+                                            break;
                                         }
                                     }
                                 }
