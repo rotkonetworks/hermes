@@ -232,45 +232,35 @@ impl Worker {
             let block: CompactBlock = block?.try_into()?;
 
             let height = block.height;
+            // INVARIANT (restored from upstream — see commit 360bf75a regression):
+            //
+            // The SCT must only ever advance by applying blocks strictly
+            // in-order, one at a time. The previous patch (360bf75a) replaced
+            // the strict `bail!` below with silent `continue` skips and an
+            // "adjust expected height" path, intending to dedupe blocks from
+            // concurrent sync workers. That is unsafe: skipping a block whose
+            // SCT mutation was not applied (or applying neighbours around a
+            // skipped height) leaves the in-memory `tct::Tree` frontier at a
+            // hash that corresponds to NO finalized chain block-boundary root
+            // — a "phantom" anchor. A continuously-running view never trips
+            // this; any *resumed/cold* view does, then every tx it builds
+            // carries a non-canonical anchor and the chain rejects it with
+            // `provided anchor ... is not a valid SCT root` (a fresh bad
+            // anchor each retry). This is the cold-relayer failure.
+            //
+            // Correct behaviour on ANY discontinuity: bail. The caller restarts
+            // the sync run, which reloads the SCT from persisted storage in
+            // strict order — self-healing, never divergent. The real fix for
+            // the concurrent-worker race the patch targeted is one ViewServer
+            // per view DB, NOT block-skipping.
             if height != expected_height {
-                if height < expected_height {
-                    // Block is behind — another concurrent worker already processed it.
-                    tracing::debug!(
-                        block_height = height,
-                        expected_height,
-                        "skipping block already processed by concurrent worker"
-                    );
-                    continue;
-                }
-                // Block is ahead — the DB may have been advanced by a concurrent worker.
-                // Re-read the DB to see if we can adjust.
-                let db_height = self.storage.last_sync_height().await?;
-                let new_expected = db_height.map(|h| h + 1).unwrap_or(0);
-                if height >= new_expected && height <= new_expected + 1 {
-                    tracing::info!(
-                        block_height = height,
-                        old_expected = expected_height,
-                        new_expected,
-                        "adjusted expected height after concurrent DB advance"
-                    );
-                    expected_height = height;
-                } else if height < new_expected {
-                    tracing::debug!(
-                        block_height = height,
-                        db_expected = new_expected,
-                        "skipping block behind DB height"
-                    );
-                    continue;
-                } else {
-                    anyhow::bail!(
-                        "Wrong block height {} for latest sync height {} (DB at {:?})",
-                        height,
-                        expected_height.checked_sub(1).unwrap_or(0),
-                        db_height,
-                    );
-                }
+                anyhow::bail!(
+                    "Wrong block height {} for latest sync height {}",
+                    height,
+                    expected_height.checked_sub(1).unwrap_or(0)
+                );
             }
-            expected_height = height + 1;
+            expected_height += 1;
 
             // Wait for any in-progress transaction build to finish before
             // processing this block. The tx builder holds the write side of
