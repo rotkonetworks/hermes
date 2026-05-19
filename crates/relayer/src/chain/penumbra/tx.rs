@@ -18,6 +18,9 @@ use penumbra_sdk_keys::keys::AddressIndex;
 use penumbra_sdk_proto::box_grpc_svc::BoxGrpcService;
 use penumbra_sdk_proto::core::component::ibc::v1::IbcRelay as ProtoIbcRelay;
 use penumbra_sdk_proto::custody::v1::custody_service_client::CustodyServiceClient;
+use penumbra_sdk_proto::core::component::sct::v1::query_service_client::QueryServiceClient as SctQueryServiceClient;
+use penumbra_sdk_proto::core::component::sct::v1::AnchorByHeightRequest;
+use penumbra_sdk_tct::Root as TctRoot;
 use penumbra_sdk_proto::view::v1::{
     broadcast_transaction_response::Status as BroadcastStatus,
     view_service_client::ViewServiceClient, GasPricesRequest,
@@ -39,6 +42,14 @@ use crate::chain::tracking::TrackedMsgs;
 /// witness was already pruned (the narrow window between block commit and
 /// the next plan attempt).
 const MAX_WITNESS_RETRIES: usize = 3;
+
+/// How many recent block heights to scan when verifying that the built
+/// transaction's SCT anchor was actually recorded by the chain. The view's
+/// reported `full_sync_height` can trail the height whose sealed root the
+/// witness captured by a few blocks, so we check a small window rather than
+/// a single height. `check_claimed_anchor` accepts ANY ever-recorded root,
+/// so a match anywhere in the window is sufficient.
+const ANCHOR_CANONICAL_WINDOW: u64 = 16;
 
 pub async fn build_penumbra_tx(
     view_client: &mut ViewServiceClient<BoxGrpcService>,
@@ -225,6 +236,7 @@ pub async fn build_and_submit_penumbra_tx(
     tracked_msgs: TrackedMsgs,
     tx_build_lock: &Arc<RwLock<()>>,
     await_commit: bool,
+    grpc_url: String,
 ) -> Result<TransactionId, PenumbraError> {
     let gas_prices: penumbra_sdk_fee::GasPrices = view_client
         .gas_prices(GasPricesRequest {})
@@ -279,12 +291,87 @@ pub async fn build_and_submit_penumbra_tx(
 
         match penumbra_sdk_wallet::build_transaction(fvk, view_client, custody_client, plan).await {
             Ok(tx) => {
-                // Submit immediately, still holding the lock. Smallest
-                // possible anchor -> check_stateful window. No re-plan,
-                // no re-prove, no backoff between build and submit.
-                let res = submit_transaction(view_client, tx, await_commit).await;
+                // Canonical-anchor gate.
+                //
+                // The spend proof's public input `tx.anchor` is the local
+                // view's SCT root at witness time. The chain's
+                // `check_claimed_anchor` accepts an anchor iff it was EVER a
+                // recorded SCT root (no recency window) — so the ONLY failure
+                // mode for "provided anchor ... is not a valid SCT root" is a
+                // non-canonical local root: a frontier the chain never sealed
+                // and recorded. A continuously-synced (warm) view always rests
+                // on freshly-sealed block boundaries that ARE recorded roots;
+                // a cold/resumed view can sit on an intermediate frontier that
+                // was never recorded. Before paying to broadcast, verify the
+                // built anchor against the chain's recorded anchors over a
+                // small recent window. If it isn't canonical yet, release the
+                // sync pause so the worker can apply+seal more blocks, then
+                // re-plan (bounded by MAX_WITNESS_RETRIES).
+                let sync_h = ViewClient::status(view_client)
+                    .await
+                    .map(|s| s.full_sync_height)
+                    .unwrap_or(0);
+
+                let mut canonical = false;
+                match SctQueryServiceClient::connect(grpc_url.clone()).await {
+                    Ok(mut sct) => {
+                        let lo = sync_h.saturating_sub(ANCHOR_CANONICAL_WINDOW);
+                        for h in (lo..=sync_h).rev() {
+                            match sct
+                                .anchor_by_height(AnchorByHeightRequest { height: h })
+                                .await
+                            {
+                                Ok(resp) => {
+                                    if let Some(mr) = resp.into_inner().anchor {
+                                        if let Ok(chain_root) = TctRoot::try_from(mr) {
+                                            if chain_root == tx.anchor {
+                                                canonical = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::debug!(height = h, error = %e, "anchor_by_height query failed");
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // If we cannot verify, fail safe by submitting (old
+                        // behaviour) rather than blocking relaying entirely.
+                        tracing::warn!(error = %e, "could not connect SCT query service for anchor gate; submitting unverified");
+                        canonical = true;
+                    }
+                }
+
+                if canonical {
+                    let res = submit_transaction(view_client, tx, await_commit).await;
+                    drop(_sync_pause);
+                    return res;
+                }
+
                 drop(_sync_pause);
-                return res;
+                if attempt < MAX_WITNESS_RETRIES {
+                    tracing::warn!(
+                        attempt,
+                        sync_h,
+                        "built SCT anchor is not (yet) a chain-recorded root \
+                         (cold/non-canonical view frontier); releasing sync \
+                         pause to let the view seal recorded blocks, then \
+                         re-planning"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+                    continue;
+                }
+                return Err(PenumbraError::TxBuild {
+                    reason: format!(
+                        "view SCT anchor never matched a chain-recorded anchor \
+                         within {} blocks of sync_height {} after {} attempts \
+                         — view is non-canonical (needs continuous resync)",
+                        ANCHOR_CANONICAL_WINDOW, sync_h, MAX_WITNESS_RETRIES
+                    ),
+                });
             }
             Err(e) => {
                 let err_msg = e.to_string();

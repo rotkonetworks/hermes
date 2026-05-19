@@ -437,6 +437,7 @@ impl PenumbraChain {
             tracked_msgs,
             &self.tx_build_lock,
             wait_for_commit,
+            self.config.grpc_addr.to_string(),
         )
         .await
         .map_err(|e| {
