@@ -5,5 +5,6 @@
 
 mod regression {
     pub mod memory_non_growth;
+    pub mod refresh_worker_short_circuit;
     pub mod view_canonicality;
 }
