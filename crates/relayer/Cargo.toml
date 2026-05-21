@@ -17,6 +17,11 @@ all-features = true
 
 [features]
 default   = ["flex-error/std", "flex-error/eyre_tracer"]
+# Build the test binaries with dhat-rs as the global allocator. Used by the
+# memory-leak reproduction test to produce a heap profile (dhat-heap.json).
+# Off by default — has overhead and only meaningful for the specific test
+# under investigation.
+dhat-heap = []
 
 [dependencies]
 penumbra-sdk-proto       = { version = "=2.0.6", features = ["box-grpc", "rpc"] }
@@ -101,3 +106,7 @@ test-log          = { workspace = true, features = ["trace"] }
 
 # Needed for generating (synthetic) light blocks.
 tendermint-testgen = { workspace = true }
+
+# Heap profiling for memory-leak regression / investigation. Activated by
+# the `dhat-heap` feature on the relayer crate's test binaries.
+dhat = "0.3"
