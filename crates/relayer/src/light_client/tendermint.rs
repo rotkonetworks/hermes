@@ -70,9 +70,21 @@ impl super::LightClient<CosmosSdkChain> for LightClient {
         // client. Skip adjust_headers (which fetches trusted_height+1 that
         // may be pruned) and build the header directly.
         if supporting.is_empty() && client_state.allow_update_after_expiry() {
-            // For expired client recovery, use the target block's own next
-            // validator set as the trusted validators. The chain will validate.
-            let next_block = self.fetch(target_height.increment())?;
+            // For expired client recovery, build the header directly without
+            // running adjust_headers. The trusted_validator_set MUST be the
+            // validator set at `trusted_height + 1` — this is what the chain's
+            // 07-tendermint update.go check hashes against the stored
+            // next_validators_hash at trusted_height. Previously this used
+            // `target_height.increment()` which produces vals_at(target+1):
+            // any validator rotation between trusted and target causes the
+            // cosmos check at update.go:224 to reject with `does not hash to
+            // latest trusted validators` (Expected=hash(vals@trusted+1),
+            // got=hash(vals@target+1)).
+            //
+            // If `trusted_height + 1` is pruned on the source RPC, this fetch
+            // will fail and the caller should use --archive-address to point
+            // at an archive node. Mismatched validators is never acceptable.
+            let next_block = self.fetch(trusted_height.increment())?;
             let header = TmHeader {
                 signed_header: target.signed_header,
                 validator_set: target.validators,
