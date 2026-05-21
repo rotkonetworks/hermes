@@ -790,6 +790,21 @@ impl<ChainA: ChainHandle, ChainB: ChainHandle> RelayPath<ChainA, ChainB> {
                             port_id,
                             &counterparty,
                         );
+
+                        // harden/health-metrics:
+                        // Record Unix-ts of this successful broadcast so an
+                        // operator can alert on `time() - x > N`.
+                        // Note `chain` here is the *target* of the
+                        // broadcast (== submission target), `counterparty`
+                        // is the other side. We label them as src_chain
+                        // (submission target) and dst_chain (counterparty)
+                        // to match the (src,dst,channel) convention used
+                        // by `init_per_channel`.
+                        ibc_telemetry::global().last_broadcast_success(
+                            &chain,
+                            &counterparty,
+                            channel_id,
+                        );
                     });
 
                     // Record relay events for history tracking

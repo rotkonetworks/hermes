@@ -931,6 +931,22 @@ impl<DstChain: ChainHandle, SrcChain: ChainHandle> ForeignClient<DstChain, SrcCh
 
         let trusting_period = client_state.trusting_period();
 
+        // harden/health-metrics: emit `client_seconds_to_expiry` on every
+        // refresh tick. Computed as trusting_period - elapsed; signed,
+        // so an expired client reads as negative (more informative than
+        // clamping to zero).
+        if let Some(elapsed) = elapsed {
+            let seconds_remaining =
+                trusting_period.as_secs_f64() - elapsed.as_secs_f64();
+            telemetry!(
+                client_seconds_to_expiry,
+                &self.src_chain.id(),
+                &self.dst_chain.id(),
+                self.id(),
+                seconds_remaining,
+            );
+        }
+
         match (elapsed, refresh_period) {
             (None, _) => Ok(None),
             (Some(elapsed), refresh_period) => {

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod health;
 pub mod query;
 pub mod service;
 pub mod tx;
@@ -438,6 +439,7 @@ impl PenumbraChain {
             &self.tx_build_lock,
             wait_for_commit,
             self.config.grpc_addr.to_string(),
+            self.config.id.clone(),
         )
         .await
         .map_err(|e| {
@@ -717,6 +719,22 @@ impl ChainEndpoint for PenumbraChain {
                 ibc_channel_grpc_client,
             ));
         let query_service = Arc::new(Mutex::new(tower::util::BoxService::new(query_service)));
+
+        // harden/health-metrics:
+        // Spawn the periodic Penumbra view health probe.
+        // - emits hermes_view_sync_lag_blocks{chain}
+        // - emits hermes_view_canonical{chain}
+        // - refreshes hermes_oom_score on the same tick (no-op on
+        //   non-Linux, no extra task needed).
+        // The probe holds its own clone of view_client / rpc_client
+        // and is detached for process lifetime.
+        health::spawn_view_health_probe(
+            &rt,
+            config.id.clone(),
+            view_client.clone(),
+            rpc_client.clone(),
+            grpc_addr.to_string(),
+        );
 
         Ok(Self {
             config,

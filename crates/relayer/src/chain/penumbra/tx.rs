@@ -31,6 +31,8 @@ use penumbra_sdk_view::ViewClient;
 use penumbra_sdk_wallet::plan::Planner;
 use signature::rand_core::OsRng;
 
+use ibc_relayer_types::core::ics24_host::identifier::ChainId;
+
 use crate::chain::penumbra::error::PenumbraError;
 use crate::chain::tracking::TrackedMsgs;
 
@@ -237,6 +239,7 @@ pub async fn build_and_submit_penumbra_tx(
     tx_build_lock: &Arc<RwLock<()>>,
     await_commit: bool,
     grpc_url: String,
+    chain_id: ChainId,
 ) -> Result<TransactionId, PenumbraError> {
     let gas_prices: penumbra_sdk_fee::GasPrices = view_client
         .gas_prices(GasPricesRequest {})
@@ -340,7 +343,13 @@ pub async fn build_and_submit_penumbra_tx(
                     Err(e) => {
                         // If we cannot verify, fail safe by submitting (old
                         // behaviour) rather than blocking relaying entirely.
+                        // We still record the event so operators see how
+                        // often the gate is bypassed.
                         tracing::warn!(error = %e, "could not connect SCT query service for anchor gate; submitting unverified");
+                        ibc_telemetry::global().gate_rejection(
+                            &chain_id,
+                            "anchor_query_failed",
+                        );
                         canonical = true;
                     }
                 }
@@ -364,6 +373,10 @@ pub async fn build_and_submit_penumbra_tx(
                     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
                     continue;
                 }
+                ibc_telemetry::global().gate_rejection(
+                    &chain_id,
+                    "non_canonical_anchor",
+                );
                 return Err(PenumbraError::TxBuild {
                     reason: format!(
                         "view SCT anchor never matched a chain-recorded anchor \

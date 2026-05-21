@@ -228,6 +228,62 @@ pub struct TelemetryState {
 
     /// Number of times packet data query returned empty results
     packet_data_query_empty: Counter<u64>,
+
+    // --- harden/health-metrics: preemptive signals ---
+    //
+    // Goal: emit alertable signals BEFORE user-facing degradation.
+    // - `client_seconds_to_expiry`  -> would have warned 3 days before
+    //   today's noble-client near-expiry instead of 0 days.
+    // - `view_sync_lag_blocks`      -> catches Penumbra view stalls (a
+    //   stalled view that cannot seal blocks is the precondition for
+    //   the cold-view non-canonical-anchor failure).
+    // - `view_canonical`            -> 1 iff the chain has recorded a
+    //   root at the view's sync_height. 0 means the view is sitting
+    //   on an unrecorded frontier and every broadcast attempt will
+    //   trip the canonical-anchor gate.
+    // - `gate_rejection_total`      -> monotonic count of times the
+    //   canonical-anchor gate refused to broadcast.
+    // - `last_broadcast_success_timestamp_seconds` -> Unix ts of the
+    //   most recent successful packet relay broadcast per channel;
+    //   `time() - x` is "seconds since last success".
+    // - `oom_score`                 -> /proc/self/oom_score; rising
+    //   value predicts an OOM kill.
+    //
+    /// Time-to-expiry (seconds) for each tracked IBC client.
+    /// `trusting_period - (src_chain_now - latest_consensus_timestamp)`.
+    /// Signed (f64): goes negative once a client is past trusting
+    /// period, which is *more* informative than clamping to zero.
+    client_seconds_to_expiry: ObservableGauge<f64>,
+
+    /// Penumbra view sync lag in blocks:
+    /// `chain.latest_block_height - view.sync_height`.
+    /// Signed (i64) so a transient view-ahead-of-chain reading due to
+    /// load-balanced RPC + view-sync raciness reads as negative rather
+    /// than wrapping; in steady state always >= 0.
+    view_sync_lag_blocks: ObservableGauge<i64>,
+
+    /// 0/1: does the chain have a recorded SCT anchor at the view's
+    /// current sync_height? 0 means the view rests on a frontier the
+    /// chain never sealed (cold-view failure mode).
+    view_canonical: ObservableGauge<u64>,
+
+    /// Monotonic count of canonical-anchor-gate rejections in
+    /// `chain/penumbra/tx.rs`, labelled by `chain` (the local
+    /// Penumbra chain whose view produced the non-canonical anchor)
+    /// and `kind` (e.g. "non_canonical_anchor",
+    /// "anchor_query_failed").
+    gate_rejection: Counter<u64>,
+
+    /// Unix timestamp (seconds) of the most recent successful
+    /// packet relay broadcast for a given (src,dst,channel).
+    /// Operators alert on `time() - x > N`.
+    last_broadcast_success_timestamp_seconds: ObservableGauge<u64>,
+
+    /// Current value of `/proc/self/oom_score`. Linux only;
+    /// silently never updates on non-Linux platforms.
+    /// Range 0..1000 (kernel-imposed). Useful for predicting OOM
+    /// kills BEFORE the OOM-killer fires.
+    oom_score: ObservableGauge<i64>,
 }
 
 impl TelemetryState {
@@ -506,6 +562,72 @@ impl TelemetryState {
             packet_data_query_empty: meter
                 .u64_counter("packet_data_query_empty")
                 .with_description("Number of times packet data query returned empty results for pending sequences")
+                .init(),
+
+            // --- harden/health-metrics ---
+
+            client_seconds_to_expiry: meter
+                .f64_observable_gauge("client_seconds_to_expiry")
+                .with_unit(Unit::new("seconds"))
+                .with_description(
+                    "Seconds remaining until the IBC client's trusting period \
+                     elapses, computed as trusting_period - \
+                     (src_chain_now - latest_consensus_state_timestamp). \
+                     Goes negative once expired. Updated on every client \
+                     refresh worker tick (~5s)."
+                )
+                .init(),
+
+            view_sync_lag_blocks: meter
+                .i64_observable_gauge("view_sync_lag_blocks")
+                .with_unit(Unit::new("blocks"))
+                .with_description(
+                    "Penumbra-only. chain.latest_block_height - \
+                     view.full_sync_height. Negative readings indicate \
+                     RPC/load-balancer skew and should be treated as 0."
+                )
+                .init(),
+
+            view_canonical: meter
+                .u64_observable_gauge("view_canonical")
+                .with_description(
+                    "Penumbra-only. 1 iff the chain has a recorded SCT \
+                     anchor at the view's full_sync_height (necessary \
+                     condition for transactions built off this view to \
+                     pass the canonical-anchor gate). 0 means the view \
+                     is on an unrecorded frontier (cold-view failure \
+                     mode)."
+                )
+                .init(),
+
+            gate_rejection: meter
+                .u64_counter("gate_rejection")
+                .with_description(
+                    "Number of times the Penumbra canonical-anchor gate \
+                     refused to broadcast a built transaction. Label \
+                     `kind` is one of: non_canonical_anchor, \
+                     anchor_query_failed."
+                )
+                .init(),
+
+            last_broadcast_success_timestamp_seconds: meter
+                .u64_observable_gauge("last_broadcast_success_timestamp_seconds")
+                .with_unit(Unit::new("seconds"))
+                .with_description(
+                    "Unix timestamp (seconds since epoch) of the most \
+                     recent successful packet-relay tx broadcast for a \
+                     given (src_chain, dst_chain, channel). Alert on \
+                     `time() - x > threshold`."
+                )
+                .init(),
+
+            oom_score: meter
+                .i64_observable_gauge("oom_score")
+                .with_description(
+                    "Current value of /proc/self/oom_score. Linux only \
+                     (silently absent on other platforms). 0..1000. \
+                     Rising value predicts an OOM kill."
+                )
                 .init(),
         }
     }
@@ -1297,6 +1419,99 @@ impl TelemetryState {
         ];
 
         self.packet_data_query_empty.add(sequences_count, labels);
+    }
+
+    // ------------------------------------------------------------------
+    // harden/health-metrics setters
+    // ------------------------------------------------------------------
+
+    /// Record the number of seconds remaining until the IBC client at
+    /// `client_id` will fall out of its trusting period.
+    ///
+    /// `seconds_to_expiry = trusting_period - elapsed`, where `elapsed`
+    /// is the difference between the source chain's network time at
+    /// query and the consensus state's timestamp. A negative value
+    /// means the client is already past its trusting period.
+    ///
+    /// **Measurement noise**: bounded by the round-trip RPC latency
+    /// between the relayer and the source chain (typically a few
+    /// hundred ms) plus the consensus state's block time granularity.
+    /// Strictly less than one block of skew in steady state.
+    pub fn client_seconds_to_expiry(
+        &self,
+        src_chain: &ChainId,
+        dst_chain: &ChainId,
+        client_id: &ClientId,
+        seconds: f64,
+    ) {
+        let labels = &[
+            KeyValue::new("src_chain", src_chain.to_string()),
+            KeyValue::new("dst_chain", dst_chain.to_string()),
+            KeyValue::new("client_id", client_id.to_string()),
+        ];
+
+        self.client_seconds_to_expiry.observe(seconds, labels);
+    }
+
+    /// Record the difference (in blocks) between the chain's latest
+    /// block height and the local Penumbra view's full_sync_height.
+    pub fn view_sync_lag_blocks(&self, chain_id: &ChainId, lag: i64) {
+        let labels = &[KeyValue::new("chain", chain_id.to_string())];
+        self.view_sync_lag_blocks.observe(lag, labels);
+    }
+
+    /// Record whether the chain has a recorded SCT anchor at the
+    /// view's current sync_height. `canonical` should be 1 if yes,
+    /// 0 if no.
+    pub fn view_canonical(&self, chain_id: &ChainId, canonical: bool) {
+        let labels = &[KeyValue::new("chain", chain_id.to_string())];
+        self.view_canonical.observe(if canonical { 1 } else { 0 }, labels);
+    }
+
+    /// Increment the canonical-anchor gate rejection counter.
+    /// `chain` is the Penumbra chain whose view produced the
+    /// non-canonical anchor. `kind` should be a short stable string
+    /// (e.g. `"non_canonical_anchor"`, `"anchor_query_failed"`).
+    pub fn gate_rejection(&self, chain: &ChainId, kind: &'static str) {
+        let labels = &[
+            KeyValue::new("chain", chain.to_string()),
+            KeyValue::new("kind", kind),
+        ];
+        self.gate_rejection.add(1, labels);
+    }
+
+    /// Record the unix timestamp (seconds) of a successful packet
+    /// relay tx broadcast.
+    pub fn last_broadcast_success(
+        &self,
+        src_chain: &ChainId,
+        dst_chain: &ChainId,
+        channel: &ChannelId,
+    ) {
+        let labels = &[
+            KeyValue::new("src_chain", src_chain.to_string()),
+            KeyValue::new("dst_chain", dst_chain.to_string()),
+            KeyValue::new("channel", channel.to_string()),
+        ];
+
+        let ts = match Time::now().duration_since(Time::unix_epoch()) {
+            Ok(d) => d.as_secs(),
+            Err(_) => 0,
+        };
+
+        self.last_broadcast_success_timestamp_seconds.observe(ts, labels);
+    }
+
+    /// Update the `oom_score` gauge by reading `/proc/self/oom_score`.
+    /// No-op on platforms where the file cannot be read (the metric
+    /// simply remains at its last observed value, or never gets
+    /// observed at all).
+    pub fn refresh_oom_score(&self) {
+        if let Ok(s) = std::fs::read_to_string("/proc/self/oom_score") {
+            if let Ok(n) = s.trim().parse::<i64>() {
+                self.oom_score.observe(n, &[]);
+            }
+        }
     }
 }
 
