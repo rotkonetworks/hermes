@@ -676,19 +676,20 @@ impl ChainEndpoint for PenumbraChain {
                 Err(anyhow::anyhow!("view service sync exhausted all retries"))
             });
 
-        let _sync_height = match sync_result {
-            Ok(h) => {
-                tracing::info!(sync_height = h, "view service sync complete");
-                h
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "view service initial sync failed, proceeding anyway — sync will continue in background"
-                );
-                0
-            }
-        };
+        // Strict fatal-on-sync-failure (completes the revert of 360bf75a;
+        // pairs with 094ff4c2 in penumbra-sdk-view-patched/worker.rs).
+        // Proceeding with sync_height=0 on failure used to mask the actual
+        // problem and let hermes build txs against a non-canonical SCT view.
+        // The 5-attempt retry layer above already provides resilience to
+        // transient errors; if all retries fail, hermes should fail to spawn
+        // the chain rather than continue silently.
+        let _sync_height = sync_result.map_err(|e| {
+            Error::temp_penumbra_error(format!(
+                "view service initial sync failed after all retries: {}. Refusing to start chain runtime with uninitialized view (would build txs against non-canonical SCT). Investigate node connectivity or wipe view DB to force a clean cold sync.",
+                e
+            ))
+        })?;
+        tracing::info!(sync_height = _sync_height, "view service sync complete");
 
         let ibc_client_grpc_client = rt
             .block_on(IbcClientQueryClient::connect(grpc_addr.clone()))

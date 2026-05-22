@@ -1258,14 +1258,20 @@ impl Storage {
             anyhow::anyhow!("invalid: tried to record empty block as genesis block")
         })?;
 
+        // Strict bail-on-discontinuity (completes the revert of 360bf75a; pairs
+        // with 094ff4c2 in worker.rs). The previous silent-skip implementation
+        // caused in-memory SCT and persisted SCT to diverge: the caller would
+        // mutate the SCT applying notes for this block, this function would
+        // skip the write, and on subsequent restart the SCT reloaded from
+        // sqlite would carry a different root than the caller-held SCT
+        // observed.
         if height <= last_sync_height {
-            // Already recorded by a concurrent worker, skip.
-            tracing::debug!(
+            anyhow::bail!(
+                "duplicate or behind empty block {} for latest sync height {} \
+                 (caller must reload SCT from storage in strict order)",
                 height,
-                last_sync_height,
-                "skipping empty block already recorded"
+                last_sync_height
             );
-            return Ok(());
         }
 
         if height != last_sync_height + 1 {
@@ -1412,15 +1418,21 @@ impl Storage {
         //Check that the incoming block height follows the latest recorded height
         let last_sync_height = self.last_sync_height().await?;
 
-        // If a concurrent worker already recorded this block, skip it.
+        // Strict bail-on-discontinuity (completes the revert of 360bf75a;
+        // pairs with 094ff4c2 in worker.rs). Silently returning Ok here used
+        // to corrupt callers that had already mutated their in-memory SCT
+        // applying this block's note commitments: the persisted SCT stays at
+        // last_sync_height, the caller's SCT is at filtered_block.height+1's
+        // root, and the next restart loads a different root than the one
+        // observed in memory.
         if let Some(cur_height) = last_sync_height {
             if filtered_block.height <= cur_height {
-                tracing::debug!(
-                    block_height = filtered_block.height,
-                    last_sync_height = cur_height,
-                    "skipping block already recorded by concurrent worker"
+                anyhow::bail!(
+                    "duplicate or behind block {} at latest sync height {} \
+                     (caller must reload SCT from storage in strict order)",
+                    filtered_block.height,
+                    cur_height
                 );
-                return Ok(());
             }
         }
 
