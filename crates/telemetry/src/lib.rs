@@ -2,6 +2,7 @@ pub mod broadcast_error;
 pub mod encoder;
 mod path_identifier;
 pub mod server;
+pub mod simulate_error;
 pub mod state;
 
 use std::error::Error;

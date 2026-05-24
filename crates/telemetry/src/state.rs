@@ -1319,10 +1319,15 @@ impl TelemetryState {
     /// Add an error and its description to the list of errors observed after simulating
     /// a Tx with a specific account.
     pub fn simulate_errors(&self, address: &String, recoverable: bool, error_description: String) {
+        // Bound the label cardinality: the raw description embeds variable
+        // data (gas used, sequence numbers) that would otherwise leak one
+        // Prometheus time-series per retry. See
+        // LEAK_ANALYSIS_ADDENDUM_simulate_errors.md.
+        let bounded = crate::simulate_error::classify_simulate_error(&error_description);
         let labels = &[
             KeyValue::new("account", address.to_string()),
             KeyValue::new("recoverable", recoverable.to_string()),
-            KeyValue::new("error_description", error_description.to_owned()),
+            KeyValue::new("error_description", bounded),
         ];
 
         self.simulate_errors.add(1, labels);
