@@ -1,6 +1,8 @@
 use core::fmt::{Debug, Display, Error as FmtError, Formatter};
+use std::sync::Arc;
 
 use crossbeam_channel as channel;
+use once_cell::sync::OnceCell;
 use tracing::Span;
 
 use ibc_proto::ibc::{
@@ -59,6 +61,22 @@ pub struct BaseChainHandle {
 
     /// The handle's channel for sending requests to the runtime
     runtime_sender: channel::Sender<(Span, ChainRequest)>,
+
+    /// Cached chain config. Populated on first `config()` call and reused
+    /// thereafter without crossing the runtime channel. ChainConfig is
+    /// immutable for the lifetime of the hermes process (loaded once from
+    /// config.toml), so caching it is safe — and necessary, because the
+    /// chain runtime is a single-threaded dispatch loop and a long-running
+    /// request (e.g., light-client header verification, slow RPC) can
+    /// stall every subsequent channel `recv` until the per-request
+    /// RECV_TIMEOUT (5 min) fires.
+    ///
+    /// The wallet worker polls `config()` every 5s; without this cache
+    /// it would silently wedge for 5 min any time the runtime gets busy,
+    /// emitting the spurious "wallet worker wedged" error path even when
+    /// nothing was actually wrong with the wallet or its key material.
+    /// See ibc-relay project memory `project-wallet-wedge-is-critical-blocker`.
+    cached_config: Arc<OnceCell<ChainConfig>>,
 }
 
 impl BaseChainHandle {
@@ -66,6 +84,7 @@ impl BaseChainHandle {
         Self {
             chain_id,
             runtime_sender: sender,
+            cached_config: Arc::new(OnceCell::new()),
         }
     }
 
@@ -148,7 +167,15 @@ impl ChainHandle for BaseChainHandle {
     }
 
     fn config(&self) -> Result<ChainConfig, Error> {
-        self.send(|reply_to| ChainRequest::Config { reply_to })
+        if let Some(cached) = self.cached_config.get() {
+            return Ok(cached.clone());
+        }
+        let cfg = self.send(|reply_to| ChainRequest::Config { reply_to })?;
+        // Race-safe: if another caller populated the cell concurrently,
+        // the second `set` returns Err and we fall through with our own
+        // value (which is equivalent since ChainConfig is immutable).
+        let _ = self.cached_config.set(cfg.clone());
+        Ok(cfg)
     }
 
     fn get_key(&self) -> Result<AnySigningKeyPair, Error> {
