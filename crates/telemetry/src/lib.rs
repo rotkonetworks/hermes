@@ -81,6 +81,25 @@ pub fn global() -> &'static Arc<TelemetryState> {
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
 
+/// Dedicated tokio runtime that backs the telemetry HTTP server, so that
+/// /metrics scrapes never share worker threads with the relayer's
+/// CPU-heavy work (penumbra Groth16 proof building, tendermint
+/// light-client header verification, chain-runtime dispatch).
+///
+/// Previously the server was spawned via `tokio::spawn` on the calling
+/// runtime, which is the same runtime that services relay tasks. Under
+/// load those tasks saturated worker threads, the HTTP server task
+/// couldn't get scheduled, /metrics requests timed out at the watchdog's
+/// 5–30s curl timeout, and the watchdog falsely declared "telemetry
+/// unreachable" → restart hermes. Net effect: hermes was being restarted
+/// not because it was broken, but because its monitoring channel was
+/// blocked behind real work.
+///
+/// One worker thread on this dedicated runtime is enough: the HTTP
+/// server handles a few scrapes per minute. Isolation is what matters.
+static TELEMETRY_RUNTIME: once_cell::sync::OnceCell<tokio::runtime::Runtime> =
+    once_cell::sync::OnceCell::new();
+
 pub fn spawn<A>(
     addr: A,
     state: Arc<TelemetryState>,
@@ -89,7 +108,22 @@ where
     A: ToSocketAddrs + Send + 'static,
 {
     let addr = addr.to_socket_addrs()?.next().unwrap();
-    let handle = tokio::spawn(server::listen(addr, state));
+
+    let rt = TELEMETRY_RUNTIME.get_or_try_init(|| {
+        // One worker thread is plenty for /metrics scrapes; the
+        // important property is that it's a SEPARATE runtime from the
+        // relayer's, so chain-runtime CPU work cannot starve the HTTP
+        // server. Multi-thread (with worker_threads(1)) is used rather
+        // than current_thread so the runtime auto-drives its own worker
+        // — no need to manually block_on from an OS thread.
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .thread_name("hermes-telemetry")
+            .build()
+    })?;
+
+    let handle = rt.spawn(server::listen(addr, state));
 
     Ok((addr, handle))
 }
