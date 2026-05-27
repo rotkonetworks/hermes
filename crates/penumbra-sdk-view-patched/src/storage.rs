@@ -1258,27 +1258,38 @@ impl Storage {
             anyhow::anyhow!("invalid: tried to record empty block as genesis block")
         })?;
 
-        // Strict bail-on-discontinuity (completes the revert of 360bf75a; pairs
-        // with 094ff4c2 in worker.rs). The previous silent-skip implementation
-        // caused in-memory SCT and persisted SCT to diverge: the caller would
-        // mutate the SCT applying notes for this block, this function would
-        // skip the write, and on subsequent restart the SCT reloaded from
-        // sqlite would carry a different root than the caller-held SCT
-        // observed.
+        // BACKWARD duplicate or replay: silently accept and return.
+        //
+        // Penumbra's compact-block subscription can re-deliver blocks at
+        // edges — on reconnection, on stream rebuffer, or when the worker
+        // re-subscribes after a transient. Re-receiving an empty block we
+        // already processed is benign: empty blocks don't mutate the sqlite
+        // SCT tables anyway (record_empty_block only bumps `uncommitted_height`).
+        // The caller's in-memory SCT may have already advanced past this
+        // height — that's fine, we accept and return Ok.
+        //
+        // The strict bail introduced in ace0f713 (revert of 360bf75a) was
+        // an overcorrection: it treated benign replay as fatal divergence
+        // and aborted view sync, which left the view stuck and triggered
+        // hermes restart loops. Returning Ok here is the historically
+        // correct behavior because:
+        //   1. The strict in-memory worker bail in worker.rs (094ff4c2)
+        //      already prevents the original 360bf75a failure mode
+        //      (concurrent workers racing on the same DB).
+        //   2. Empty-block re-delivery never causes on-disk corruption —
+        //      this function does not touch the SCT tables.
         if height <= last_sync_height {
-            anyhow::bail!(
-                "duplicate or behind empty block {} for latest sync height {} \
-                 (caller must reload SCT from storage in strict order)",
-                height,
-                last_sync_height
-            );
+            return Ok(());
         }
 
+        // FORWARD gap: block height jumped ahead by more than 1. This
+        // would indicate a missed block in the subscription stream and
+        // is a real divergence — bail rather than silently advance.
         if height != last_sync_height + 1 {
             anyhow::bail!(
-                "Wrong block height {} for latest sync height {}",
-                height,
-                last_sync_height
+                "Forward gap: expected empty block {} but got {} (missed block(s) in stream)",
+                last_sync_height + 1,
+                height
             );
         }
 
@@ -1418,21 +1429,28 @@ impl Storage {
         //Check that the incoming block height follows the latest recorded height
         let last_sync_height = self.last_sync_height().await?;
 
-        // Strict bail-on-discontinuity (completes the revert of 360bf75a;
-        // pairs with 094ff4c2 in worker.rs). Silently returning Ok here used
-        // to corrupt callers that had already mutated their in-memory SCT
-        // applying this block's note commitments: the persisted SCT stays at
-        // last_sync_height, the caller's SCT is at filtered_block.height+1's
-        // root, and the next restart loads a different root than the one
-        // observed in memory.
+        // BACKWARD duplicate or replay: silently accept and return.
+        //
+        // Penumbra's compact-block subscription can re-deliver blocks at
+        // edges (reconnection, stream rebuffer, worker re-subscription).
+        // Re-receiving a scanned block we already persisted is benign
+        // because record_block runs inside a sqlite transaction whose
+        // sync_height update is atomic with the SCT/note writes — the
+        // on-disk state is already correct for this height. The caller's
+        // in-memory SCT may have advanced past this height; reapplying
+        // would corrupt it. Returning Ok skips the write and lets the
+        // caller resync via its own canonicality check.
+        //
+        // The strict bail introduced in ace0f713 was an overcorrection:
+        // it treated benign replay as fatal and aborted view sync, which
+        // left the view stuck at the last successful height and triggered
+        // hermes restart loops. Returning Ok here is safe because the
+        // strict worker.rs in-memory bail (094ff4c2) already prevents the
+        // original 360bf75a failure mode (concurrent workers racing on
+        // the same DB).
         if let Some(cur_height) = last_sync_height {
             if filtered_block.height <= cur_height {
-                anyhow::bail!(
-                    "duplicate or behind block {} at latest sync height {} \
-                     (caller must reload SCT from storage in strict order)",
-                    filtered_block.height,
-                    cur_height
-                );
+                return Ok(());
             }
         }
 
@@ -1444,8 +1462,13 @@ impl Storage {
         };
 
         if !correct_height {
+            // Forward gap: bail. This is a real divergence (missed block
+            // in the subscription stream) and silently advancing would
+            // corrupt the SCT.
             anyhow::bail!(
-                "Wrong block height {} for latest sync height {:?}",
+                "Forward gap: expected block {} but got {} (missed block(s) in stream); \
+                 latest sync height was {:?}",
+                last_sync_height.map(|h| h + 1).unwrap_or(0),
                 filtered_block.height,
                 last_sync_height
             );
