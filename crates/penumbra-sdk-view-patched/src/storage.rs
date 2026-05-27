@@ -1258,38 +1258,24 @@ impl Storage {
             anyhow::anyhow!("invalid: tried to record empty block as genesis block")
         })?;
 
-        // BACKWARD duplicate or replay: silently accept and return.
+        // STRICT in-order requirement. By the time we get here, the
+        // worker has already mutated the in-memory SCT for this height
+        // (end_block + maybe end_epoch). If the on-disk last_sync_height
+        // doesn't match what the worker expects, returning Ok would
+        // leave disk and in-memory SCT desynced and silently corrupt
+        // every subsequent block. We MUST bail — the caller restarts
+        // and reloads SCT from disk in strict order (self-healing).
         //
-        // Penumbra's compact-block subscription can re-deliver blocks at
-        // edges — on reconnection, on stream rebuffer, or when the worker
-        // re-subscribes after a transient. Re-receiving an empty block we
-        // already processed is benign: empty blocks don't mutate the sqlite
-        // SCT tables anyway (record_empty_block only bumps `uncommitted_height`).
-        // The caller's in-memory SCT may have already advanced past this
-        // height — that's fine, we accept and return Ok.
-        //
-        // The strict bail introduced in ace0f713 (revert of 360bf75a) was
-        // an overcorrection: it treated benign replay as fatal divergence
-        // and aborted view sync, which left the view stuck and triggered
-        // hermes restart loops. Returning Ok here is the historically
-        // correct behavior because:
-        //   1. The strict in-memory worker bail in worker.rs (094ff4c2)
-        //      already prevents the original 360bf75a failure mode
-        //      (concurrent workers racing on the same DB).
-        //   2. Empty-block re-delivery never causes on-disk corruption —
-        //      this function does not touch the SCT tables.
-        if height <= last_sync_height {
-            return Ok(());
-        }
-
-        // FORWARD gap: block height jumped ahead by more than 1. This
-        // would indicate a missed block in the subscription stream and
-        // is a real divergence — bail rather than silently advance.
+        // In practice this bail never fires legitimately: worker.rs
+        // pre-checks block height BEFORE acquiring the SCT lock and
+        // drops backward duplicates / bails on forward gaps. This is
+        // a defensive backstop only.
         if height != last_sync_height + 1 {
             anyhow::bail!(
-                "Forward gap: expected empty block {} but got {} (missed block(s) in stream)",
-                last_sync_height + 1,
-                height
+                "Wrong block height {} for latest sync height {} \
+                 (worker pre-check should have caught this; SCT may already be desynced)",
+                height,
+                last_sync_height
             );
         }
 
@@ -1429,46 +1415,27 @@ impl Storage {
         //Check that the incoming block height follows the latest recorded height
         let last_sync_height = self.last_sync_height().await?;
 
-        // BACKWARD duplicate or replay: silently accept and return.
+        // STRICT in-order requirement. By the time we get here, the
+        // worker has already mutated the in-memory SCT for this block
+        // via scan_block. If the on-disk last_sync_height doesn't match
+        // what the worker expects, returning Ok would leave disk and
+        // in-memory SCT desynced and silently corrupt every subsequent
+        // block. We MUST bail — the caller restarts and reloads SCT
+        // from disk in strict order (self-healing).
         //
-        // Penumbra's compact-block subscription can re-deliver blocks at
-        // edges (reconnection, stream rebuffer, worker re-subscription).
-        // Re-receiving a scanned block we already persisted is benign
-        // because record_block runs inside a sqlite transaction whose
-        // sync_height update is atomic with the SCT/note writes — the
-        // on-disk state is already correct for this height. The caller's
-        // in-memory SCT may have advanced past this height; reapplying
-        // would corrupt it. Returning Ok skips the write and lets the
-        // caller resync via its own canonicality check.
-        //
-        // The strict bail introduced in ace0f713 was an overcorrection:
-        // it treated benign replay as fatal and aborted view sync, which
-        // left the view stuck at the last successful height and triggered
-        // hermes restart loops. Returning Ok here is safe because the
-        // strict worker.rs in-memory bail (094ff4c2) already prevents the
-        // original 360bf75a failure mode (concurrent workers racing on
-        // the same DB).
-        if let Some(cur_height) = last_sync_height {
-            if filtered_block.height <= cur_height {
-                return Ok(());
-            }
-        }
-
+        // In practice this bail never fires legitimately: worker.rs
+        // pre-checks block height BEFORE acquiring the SCT lock and
+        // drops backward duplicates / bails on forward gaps. This is
+        // a defensive backstop only.
         let correct_height = match last_sync_height {
-            // Require that the new block follows the last one we scanned.
             Some(cur_height) => filtered_block.height == cur_height + 1,
-            // Require that the new block represents the initial chain state.
             None => filtered_block.height == 0,
         };
 
         if !correct_height {
-            // Forward gap: bail. This is a real divergence (missed block
-            // in the subscription stream) and silently advancing would
-            // corrupt the SCT.
             anyhow::bail!(
-                "Forward gap: expected block {} but got {} (missed block(s) in stream); \
-                 latest sync height was {:?}",
-                last_sync_height.map(|h| h + 1).unwrap_or(0),
+                "Wrong block height {} for latest sync height {:?} \
+                 (worker pre-check should have caught this; SCT may already be desynced)",
                 filtered_block.height,
                 last_sync_height
             );

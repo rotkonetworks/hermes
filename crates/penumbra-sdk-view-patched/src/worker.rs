@@ -253,11 +253,40 @@ impl Worker {
             // strict order — self-healing, never divergent. The real fix for
             // the concurrent-worker race the patch targeted is one ViewServer
             // per view DB, NOT block-skipping.
-            if height != expected_height {
-                anyhow::bail!(
-                    "Wrong block height {} for latest sync height {}",
+            // Pre-check block height BEFORE acquiring the SCT lock or touching
+            // any in-memory state. Penumbra's compact-block subscription does
+            // routinely re-deliver blocks at edges (reconnect, rebuffer, worker
+            // re-subscription). Three cases:
+            //
+            //   1. BACKWARD duplicate (height < expected_height) — chain
+            //      replaying a block we already processed. SKIP silently
+            //      without mutating in-memory SCT or touching disk. Critical:
+            //      this happens BEFORE the SCT lock so no mutation can leak.
+            //      The on-disk state is already correct at the persisted
+            //      sync_height; in-memory SCT is also already correct at
+            //      expected_height-1. Both consistent, no action needed.
+            //
+            //   2. FORWARD gap (height > expected_height) — we missed a
+            //      block in the subscription stream. This is a real desync
+            //      and silently advancing would leave the SCT at a phantom
+            //      frontier. BAIL so the worker restarts and reloads SCT
+            //      from disk in strict order — self-healing.
+            //
+            //   3. EXACT match (height == expected_height) — normal advance,
+            //      proceed to lock + mutate + persist.
+            if height < expected_height {
+                tracing::debug!(
+                    "skipping replayed block height={} (expected={})",
                     height,
-                    expected_height.checked_sub(1).unwrap_or(0)
+                    expected_height
+                );
+                continue;
+            }
+            if height > expected_height {
+                anyhow::bail!(
+                    "Forward gap: expected block {} but got {} (missed block(s) in stream)",
+                    expected_height,
+                    height
                 );
             }
             expected_height += 1;
