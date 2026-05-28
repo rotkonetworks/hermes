@@ -89,7 +89,7 @@ pub async fn create_grpc_client<T>(
     let builder = tonic::transport::Channel::builder(grpc_addr.clone())
         .keep_alive_while_idle(true)
         .http2_keep_alive_interval(std::time::Duration::from_secs(30))
-        .keep_alive_timeout(std::time::Duration::from_secs(10))
+        .keep_alive_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(60))
         .connect_timeout(std::time::Duration::from_secs(10));
 
