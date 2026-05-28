@@ -63,7 +63,35 @@ pub async fn create_grpc_client<T>(
     }
 
     // Slow path: open a new Channel, insert into the pool, return a clone.
-    let builder = tonic::transport::Channel::builder(grpc_addr.clone());
+    //
+    // Liveness configuration is critical. The pooled Channel is reused for
+    // the entire process lifetime; if its underlying HTTP/2 connection goes
+    // half-closed (NAT timeout, peer crash without FIN, OS socket reset
+    // without notification), tonic has NO built-in detection and every
+    // subsequent request via that Channel will hang waiting for a response
+    // that never comes. This caused the silent wedge we hit on
+    // 2026-05-28: all threads sleeping in epoll, pd healthy and responding
+    // to direct curls, but hermes' chain runtime stuck on dead-pool
+    // futures.
+    //
+    // The four settings below address this:
+    //   - keep_alive_while_idle: send pings even when no traffic in flight
+    //   - http2_keep_alive_interval: send a PING every 30s
+    //   - keep_alive_timeout: if no PONG within 10s, close the connection
+    //   - timeout: any single request that takes >60s is aborted
+    //
+    // Together, a dead connection is detected within ~40s (one PING window
+    // + timeout). tonic transparently reconnects on the next call, and
+    // outstanding requests fail cleanly (Error) rather than hanging
+    // forever. The Channel cached in the pool reconnects under the hood;
+    // we don't need to evict from the pool because tonic's internal
+    // Service reuses the same surface across reconnections.
+    let builder = tonic::transport::Channel::builder(grpc_addr.clone())
+        .keep_alive_while_idle(true)
+        .http2_keep_alive_interval(std::time::Duration::from_secs(30))
+        .keep_alive_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(10));
 
     // Don't configures TLS for the endpoint if using IPv6
     let builder = if grpc_addr.scheme() == Some(&http::uri::Scheme::HTTPS) {
