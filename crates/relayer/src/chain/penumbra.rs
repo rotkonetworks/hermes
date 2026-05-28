@@ -418,7 +418,23 @@ impl PenumbraChain {
         &mut self,
         tracked_msgs: TrackedMsgs,
         wait_for_commit: bool,
-    ) -> Result<penumbra_sdk_transaction::txhash::TransactionId, Error> {
+    ) -> Result<Vec<penumbra_sdk_transaction::txhash::TransactionId>, Error> {
+        // A1i: chunk IBC messages 1-per-Penumbra-tx.
+        //
+        // Each Penumbra transaction that wraps IBC actions requires a
+        // shielded spend (for fees) whose Groth16 proof allocates ~1-2 GB
+        // of transient memory during witness+prove. Without chunking, the
+        // supervisor batches all pending IBC messages (5-7+ during catch-up)
+        // into one tx → one plan with multiple spends → linear memory blow-up
+        // → cgroup OOM. Manual `hermes tx packet-recv --packet-sequences <N>`
+        // never OOMed because it only ever produces a 1-message batch.
+        //
+        // Chunking restores that bound at the supervisor level: each chunk
+        // is built+submitted with bounded memory, and the per-chunk
+        // tx_build_lock serializes across chunks so peak working set stays
+        // ~1 proof at a time. Same pattern Cosmos/Namada chains use via
+        // `max_msg_num` (cosmos/batch.rs:248, namada.rs:376).
+        //
         // P0 anchor-latency fix: a single locked build+submit. The SCT
         // anchor is bound inside build_transaction's witness step and is a
         // public input to the spend proof, so it cannot be swapped without
@@ -431,28 +447,48 @@ impl PenumbraChain {
         let mut view_client = self.view_client.lock().await.clone();
         let fvk = self.config.kms_config.spend_key.full_viewing_key().clone();
 
-        let penumbra_txid = tx::build_and_submit_penumbra_tx(
-            &mut view_client,
-            &mut self.custody_client,
-            &fvk,
-            tracked_msgs,
-            &self.tx_build_lock,
-            wait_for_commit,
-            self.config.grpc_addr.to_string(),
-            self.config.id.clone(),
-        )
-        .await
-        .map_err(|e| {
-            if Self::is_stale_sct_error(&e) {
-                tracing::error!(
-                    "SCT anchor stale at check_stateful even with a minimized \
-                     locked build->submit window — the chain advanced past the \
-                     captured anchor faster than prove+broadcast. NOT wiping \
-                     view DB / NOT restarting; this worker backs off."
-                );
-            }
-            Error::from(e)
-        })?;
+        let total = tracked_msgs.msgs.len();
+        if total == 0 {
+            return Ok(vec![]);
+        }
+
+        let mut txids = Vec::with_capacity(total);
+        for (idx, msg) in tracked_msgs.msgs.iter().enumerate() {
+            let chunk = TrackedMsgs {
+                msgs: vec![msg.clone()],
+                tracking_id: tracked_msgs.tracking_id,
+            };
+            tracing::debug!(
+                chunk_idx = idx + 1,
+                chunk_total = total,
+                msg_type = %msg.type_url,
+                "submitting penumbra tx chunk"
+            );
+
+            let penumbra_txid = tx::build_and_submit_penumbra_tx(
+                &mut view_client,
+                &mut self.custody_client,
+                &fvk,
+                chunk,
+                &self.tx_build_lock,
+                wait_for_commit,
+                self.config.grpc_addr.to_string(),
+                self.config.id.clone(),
+            )
+            .await
+            .map_err(|e| {
+                if Self::is_stale_sct_error(&e) {
+                    tracing::error!(
+                        "SCT anchor stale at check_stateful even with a minimized \
+                         locked build->submit window — the chain advanced past the \
+                         captured anchor faster than prove+broadcast. NOT wiping \
+                         view DB / NOT restarting; this worker backs off."
+                    );
+                }
+                Error::from(e)
+            })?;
+            txids.push(penumbra_txid);
+        }
 
         // wait for two blocks of confirmation to be sure that the potentially load-balanced endpoints are synced
         if wait_for_commit {
@@ -479,7 +515,7 @@ impl PenumbraChain {
             }
         }
 
-        Ok(penumbra_txid)
+        Ok(txids)
     }
 
     async fn query_balance(
@@ -827,10 +863,13 @@ impl ChainEndpoint for PenumbraChain {
         tracked_msgs: TrackedMsgs,
     ) -> Result<Vec<IbcEventWithHeight>, Error> {
         let runtime = self.rt.clone();
-        let txid = runtime.block_on(self.send_messages_in_penumbratx(tracked_msgs, true))?;
-        let events = runtime.block_on(self.ibc_events_for_penumbratx(txid))?;
-
-        Ok(events)
+        let txids = runtime.block_on(self.send_messages_in_penumbratx(tracked_msgs, true))?;
+        let mut all_events = Vec::new();
+        for txid in txids {
+            let events = runtime.block_on(self.ibc_events_for_penumbratx(txid))?;
+            all_events.extend(events);
+        }
+        Ok(all_events)
     }
 
     fn send_messages_and_wait_check_tx(
@@ -855,27 +894,31 @@ impl ChainEndpoint for PenumbraChain {
         // ViewClient::broadcast_transaction) and wait for commit to ensure the
         // view db is fully synced before the next tx is planned.
         let runtime = self.rt.clone();
-        let txid = runtime.block_on(self.send_messages_in_penumbratx(tracked_msgs, true))?;
+        let txids = runtime.block_on(self.send_messages_in_penumbratx(tracked_msgs, true))?;
 
-        // Construct a synthetic tx_sync::Response for the relay sender interface.
-        // The transaction has already been confirmed at this point.
-        let hash = tendermint::Hash::from_bytes(
-            tendermint::hash::Algorithm::Sha256,
-            &txid.0,
-        )
-        .map_err(|e| Error::temp_penumbra_error(
-            format!("transaction id is not a valid sha256 hash: {}", e),
-        ))?;
+        // Construct a synthetic tx_sync::Response per submitted tx for the
+        // relay sender interface. Each transaction has already been confirmed
+        // at this point.
+        let mut responses = Vec::with_capacity(txids.len());
+        for txid in txids {
+            let hash = tendermint::Hash::from_bytes(
+                tendermint::hash::Algorithm::Sha256,
+                &txid.0,
+            )
+            .map_err(|e| Error::temp_penumbra_error(
+                format!("transaction id is not a valid sha256 hash: {}", e),
+            ))?;
 
-        let response = tendermint_rpc::endpoint::broadcast::tx_sync::Response {
-            code: tendermint::abci::Code::Ok,
-            data: Default::default(),
-            log: String::new(),
-            hash,
-            codespace: String::new(),
-        };
+            responses.push(tendermint_rpc::endpoint::broadcast::tx_sync::Response {
+                code: tendermint::abci::Code::Ok,
+                data: Default::default(),
+                log: String::new(),
+                hash,
+                codespace: String::new(),
+            });
+        }
 
-        Ok(vec![response])
+        Ok(responses)
     }
 
     fn verify_header(
