@@ -606,13 +606,29 @@ impl<R: RngCore + CryptoRng> Planner<R> {
 
         let mut notes_by_asset_id = BTreeMap::new();
         for required in self.action_list.balance_with_fee().required() {
-            // Find all the notes of this asset in the source account.
+            // Find the notes of this asset in the source account.
+            //
+            // We bound the SQL result set to roughly 2x the currently required
+            // amount: enough buffer to absorb the fee re-estimation in the loop
+            // below (where adding spends can increase the gas, hence the fee,
+            // hence the required total) while preventing a full-table scan of
+            // `spendable_notes`. Setting `amount_to_spend: None` (the original
+            // behavior) makes storage.rs scan and return EVERY unspent note for
+            // the asset, which for a wallet with hundreds of small notes
+            // amounts to MB-scale Vec<SpendableNoteRecord> allocations per
+            // retry attempt — a dominant contributor to the OOM spike during
+            // MsgUpdateClient relay on a stale trust gap.
+            //
+            // If the buffer is insufficient (rare for the relayer's tiny
+            // per-tx fees), the iteration below fails cleanly with "ran out
+            // of notes to spend" and the caller retries.
+            let amount_cap = required.amount + required.amount;
             let records: Vec<SpendableNoteRecord> = view
                 .notes(NotesRequest {
                     include_spent: false,
                     asset_id: Some(required.asset_id.into()),
                     address_index: Some(source.into()),
-                    amount_to_spend: None,
+                    amount_to_spend: Some(amount_cap.into()),
                 })
                 .await?;
             notes_by_asset_id.insert(
