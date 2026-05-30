@@ -88,14 +88,40 @@ impl BaseChainHandle {
         }
     }
 
-    /// Maximum time to wait for a response from the chain runtime.
-    /// This prevents any chain handle call from blocking forever if the
-    /// chain runtime hangs (e.g., due to a stuck RPC connection).
-    /// 5 minutes is generous enough for legitimate operations (including
-    /// transaction commits) while preventing infinite hangs.
+    /// Maximum time to wait for a response from the chain runtime for
+    /// standard queries (state reads, light-client header builds, packet
+    /// proof queries, etc). 5 minutes is generous for any individual query
+    /// and prevents the chain handle from blocking forever if the runtime
+    /// is hung on a stuck RPC connection.
     const RECV_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(300);
 
+    /// Extended timeout for `SendMessagesAndWaitCommit` /
+    /// `SendMessagesAndWaitCheckTx`. These can run long on Penumbra:
+    /// the chain runtime dispatch loop is single-threaded and holds itself
+    /// inside `chain.send_messages_and_wait_commit()` for the entire
+    /// Groth16 proof build (~30–90 s typical) plus the wait for tendermint
+    /// block commit. When multiple submission requests queue behind a
+    /// single in-flight build, the second one can wait minutes; with the
+    /// query-grade RECV_TIMEOUT it would falsely time out, surface as a
+    /// "wallet wedged" error, and cause the caller to retry — which only
+    /// piles on more queued submissions and amplifies the back-pressure.
+    /// Using a longer timeout here is purely a robustness mitigation
+    /// against false wedge signals; it does NOT fix the underlying
+    /// single-runtime serialization (see project memory
+    /// `project-wallet-wedge-is-critical-blocker` and `project-oneshot-clear-strategy-works`
+    /// for the still-open refactor that will move submissions off the
+    /// dispatch thread).
+    const RECV_TIMEOUT_SUBMIT: core::time::Duration = core::time::Duration::from_secs(900);
+
     fn send<F, O>(&self, f: F) -> Result<O, Error>
+    where
+        F: FnOnce(ReplyTo<O>) -> ChainRequest,
+        O: Debug,
+    {
+        self.send_with_timeout(f, Self::RECV_TIMEOUT)
+    }
+
+    fn send_with_timeout<F, O>(&self, f: F, timeout: core::time::Duration) -> Result<O, Error>
     where
         F: FnOnce(ReplyTo<O>) -> ChainRequest,
         O: Debug,
@@ -110,7 +136,7 @@ impl BaseChainHandle {
             .map_err(Error::send)?;
 
         receiver
-            .recv_timeout(Self::RECV_TIMEOUT)
+            .recv_timeout(timeout)
             .map_err(Error::channel_receive_timeout)?
     }
 }
@@ -146,20 +172,26 @@ impl ChainHandle for BaseChainHandle {
         &self,
         tracked_msgs: TrackedMsgs,
     ) -> Result<Vec<IbcEventWithHeight>, Error> {
-        self.send(|reply_to| ChainRequest::SendMessagesAndWaitCommit {
-            tracked_msgs,
-            reply_to,
-        })
+        self.send_with_timeout(
+            |reply_to| ChainRequest::SendMessagesAndWaitCommit {
+                tracked_msgs,
+                reply_to,
+            },
+            Self::RECV_TIMEOUT_SUBMIT,
+        )
     }
 
     fn send_messages_and_wait_check_tx(
         &self,
         tracked_msgs: TrackedMsgs,
     ) -> Result<Vec<tendermint_rpc::endpoint::broadcast::tx_sync::Response>, Error> {
-        self.send(|reply_to| ChainRequest::SendMessagesAndWaitCheckTx {
-            tracked_msgs,
-            reply_to,
-        })
+        self.send_with_timeout(
+            |reply_to| ChainRequest::SendMessagesAndWaitCheckTx {
+                tracked_msgs,
+                reply_to,
+            },
+            Self::RECV_TIMEOUT_SUBMIT,
+        )
     }
 
     fn get_signer(&self) -> Result<Signer, Error> {
