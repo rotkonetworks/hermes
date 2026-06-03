@@ -161,11 +161,16 @@ uuid = "1.7.0"
 overflow-checks = true
 
 [patch.crates-io]
-# tendermint                       = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
-# tendermint-rpc                   = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
-# tendermint-proto                 = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
-# tendermint-light-client          = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
-# tendermint-light-client-verifier = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
-# tendermint-light-client-detector = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
-# tendermint-testgen               = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
+# rotko tendermint-rs fork carrying the apphash-base64-fallback patch.
+# CometBFT 0.38 emits app_hash as base64 instead of hex; the patched
+# deserializer tries hex first and falls back to base64, letting hermes
+# talk to noble (CometBFT 0.38.19) without bumping the whole tendermint
+# ecosystem.
+tendermint                       = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
+tendermint-rpc                   = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
+tendermint-proto                 = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
+tendermint-light-client          = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
+tendermint-light-client-verifier = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
+tendermint-light-client-detector = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
+tendermint-testgen               = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
 

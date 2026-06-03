@@ -10120,3 +10120,38 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "tendermint"
+version = "0.34.0"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
+
+[[patch.unused]]
+name = "tendermint-light-client"
+version = "0.34.0"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
+
+[[patch.unused]]
+name = "tendermint-light-client-detector"
+version = "0.34.0"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
+
+[[patch.unused]]
+name = "tendermint-light-client-verifier"
+version = "0.34.0"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
+
+[[patch.unused]]
+name = "tendermint-proto"
+version = "0.34.0"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
+
+[[patch.unused]]
+name = "tendermint-rpc"
+version = "0.34.0"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
+
+[[patch.unused]]
+name = "tendermint-testgen"
+version = "0.34.0"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
