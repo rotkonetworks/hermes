@@ -315,7 +315,7 @@ impl PenumbraChain {
 
         for msg in tracked_msgs.msgs {
             let raw_ibcrelay_msg = ProtoIbcRelay {
-                raw_action: Some(pbjson_types::Any {
+                raw_action: Some(pbjson_types_07::Any {
                     type_url: msg.type_url.clone(),
                     value: msg.value.clone().into(),
                 }),
@@ -527,13 +527,19 @@ impl ChainEndpoint for PenumbraChain {
         let grpc_addr = Uri::from_str(&config.grpc_addr.to_string())
             .map_err(|e| Error::invalid_uri(config.grpc_addr.to_string(), e))?;
 
+        // penumbra-sdk-proto v2.0.6 depends on tonic 0.12, which expects http 1.x Uri.
+        // The ibc-proto query clients below still use tonic 0.10 / http 0.2, so we keep
+        // both Uris and feed each client the matching version.
+        let grpc_addr_v1 = http_1::Uri::from_str(&config.grpc_addr.to_string())
+            .map_err(|e| Error::other_with_string(format!("invalid grpc uri {}: {e}", config.grpc_addr)))?;
+
         let mut app_query = rt
-            .block_on(AppQueryClient::connect(grpc_addr.clone()))
-            .map_err(Error::grpc_transport)?;
+            .block_on(AppQueryClient::connect(grpc_addr_v1))
+            .map_err(|e| Error::other_with_string(format!("grpc transport: {e}")))?;
 
         let app_parameters = rt
-            .block_on(app_query.app_parameters(tonic::Request::new(AppParametersRequest {})))
-            .map_err(|e| Error::grpc_status(e, "app_parameters query".to_owned()))?
+            .block_on(app_query.app_parameters(tonic_12::Request::new(AppParametersRequest {})))
+            .map_err(|e| Error::other_with_string(format!("app_parameters query: {e}")))?
             .into_inner();
 
         let unbonding_delay = app_parameters

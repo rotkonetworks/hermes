@@ -21,11 +21,7 @@ use ibc_relayer_types::{
 use itertools::Itertools;
 use moka::sync::Cache;
 use tracing::{debug, error, error_span, info, trace, warn};
-#[cfg(feature = "telemetry")]
-use {
-    ibc_relayer_types::core::ics24_host::identifier::ChannelId,
-    ibc_relayer_types::core::ics24_host::identifier::PortId,
-};
+use ibc_relayer_types::core::ics24_host::identifier::{ChannelId, PortId};
 
 use super::{error::RunError, WorkerCmd};
 use crate::{

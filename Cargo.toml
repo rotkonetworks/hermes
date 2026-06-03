@@ -44,6 +44,14 @@ astria-sequencer-client = { git = "https://github.com/astriaorg/astria", rev = "
 # Penumbra dependencies. Pinned to penumbra v2.0.6 (chain pd 2.0.6 protocol).
 # Upstream renamespaced crates to penumbra-sdk-*; we keep the local name penumbra-*
 # via `package = ...` alias to minimize source churn.
+#
+# v2.0.6 brings http 1.x / tonic 0.12 / pbjson-types 0.7. The rest of hermes
+# still uses http 0.2 / tonic 0.10 / pbjson-types 0.6 for cosmos chains. We
+# alias the new versions under suffixed names and use them only at the
+# penumbra grpc boundary (crates/relayer/src/chain/penumbra/chain.rs).
+tonic_12 = { package = "tonic", version = "0.12" }
+pbjson-types_07 = { package = "pbjson-types", version = "0.7" }
+http_1 = { package = "http", version = "1" }
 penumbra-asset = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-asset", tag = "v2.0.6" }
 penumbra-custody = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-custody", tag = "v2.0.6" }
 penumbra-fee = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-fee", tag = "v2.0.6" }

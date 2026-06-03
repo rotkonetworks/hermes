@@ -68,6 +68,9 @@ penumbra-proto-astria = { workspace = true }
 penumbra-transaction = { workspace = true }
 penumbra-view = { workspace = true }
 penumbra-wallet = { workspace = true }
+tonic_12 = { workspace = true }
+pbjson-types_07 = { workspace = true }
+http_1 = { workspace = true }
 prost = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls-native-roots", "json"] }
