@@ -1342,7 +1342,7 @@ dependencies = [
 [[package]]
 name = "cnidarium-component"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1801,7 +1801,7 @@ dependencies = [
 [[package]]
 name = "decaf377-fmd"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "ark-ff",
  "ark-serialize",
@@ -1815,7 +1815,7 @@ dependencies = [
 [[package]]
 name = "decaf377-frost"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -1845,7 +1845,7 @@ dependencies = [
 [[package]]
 name = "decaf377-ka"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "ark-ff",
  "decaf377 0.10.1",
@@ -5552,7 +5552,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-app"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5621,7 +5621,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-asset"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5661,7 +5661,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-auction"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5706,7 +5706,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-community-pool"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5736,7 +5736,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-compact-block"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5767,7 +5767,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-custody"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5803,7 +5803,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-dex"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5857,7 +5857,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-distributions"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5873,7 +5873,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-fee"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5900,7 +5900,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-funding"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-groth16",
@@ -5931,7 +5931,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-governance"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5980,7 +5980,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-ibc"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6016,7 +6016,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-keys"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "aes",
  "anyhow",
@@ -6060,7 +6060,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-num"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6096,7 +6096,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-proof-params"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ec",
@@ -6125,7 +6125,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-proto"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6157,7 +6157,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-sct"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6194,7 +6194,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-shielded-pool"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6246,7 +6246,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-stake"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6287,7 +6287,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-tct"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "ark-ed-on-bls12-377",
  "ark-ff",
@@ -6316,7 +6316,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-tower-trace"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "futures",
  "hex",
@@ -6338,7 +6338,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-transaction"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6391,7 +6391,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-txhash"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "blake2b_simd 1.0.4",
@@ -6405,7 +6405,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-view"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-std",
@@ -6465,7 +6465,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-wallet"
 version = "2.0.6"
-source = "git+https://github.com/penumbra-zone/penumbra?tag=v2.0.6#f833ace04109f81b3a3ca8501b8585079a05e3a7"
+source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
 dependencies = [
  "anyhow",
  "ark-std",

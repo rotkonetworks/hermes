@@ -52,20 +52,20 @@ astria-sequencer-client = { git = "https://github.com/astriaorg/astria", rev = "
 tonic_12 = { package = "tonic", version = "0.12" }
 pbjson-types_07 = { package = "pbjson-types", version = "0.7" }
 http_1 = { package = "http", version = "1" }
-penumbra-asset = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-asset", tag = "v2.0.6" }
-penumbra-custody = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-custody", tag = "v2.0.6" }
-penumbra-fee = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-fee", tag = "v2.0.6" }
-penumbra-ibc = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-ibc", tag = "v2.0.6" }
-penumbra-keys = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-keys", tag = "v2.0.6" }
-penumbra-proto = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-proto", tag = "v2.0.6", features = [
+penumbra-asset = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-asset", branch = "tct-graceful-witness" }
+penumbra-custody = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-custody", branch = "tct-graceful-witness" }
+penumbra-fee = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-fee", branch = "tct-graceful-witness" }
+penumbra-ibc = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-ibc", branch = "tct-graceful-witness" }
+penumbra-keys = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-keys", branch = "tct-graceful-witness" }
+penumbra-proto = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-proto", branch = "tct-graceful-witness", features = [
     "box-grpc",
     "rpc",
 ] }
-penumbra-transaction = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-transaction", tag = "v2.0.6", features = [
+penumbra-transaction = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-transaction", branch = "tct-graceful-witness", features = [
     "download-proving-keys",
 ] }
-penumbra-wallet = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-wallet", tag = "v2.0.6" }
-penumbra-view = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-view", tag = "v2.0.6" }
+penumbra-wallet = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-wallet", branch = "tct-graceful-witness" }
+penumbra-view = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-view", branch = "tct-graceful-witness" }
 # Penumbra dependencies, specifically for Astria support. Renamespaced, to avoid conflicts with Penumbra support.
 penumbra-ibc-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-ibc", tag = "v0.69.1" }
 penumbra-proto-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-proto", tag = "v0.69.1", features = [
@@ -168,3 +168,4 @@ overflow-checks = true
 # tendermint-light-client-verifier = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
 # tendermint-light-client-detector = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
 # tendermint-testgen               = { git = "https://github.com/informalsystems/tendermint-rs.git", branch = "main" }
+
