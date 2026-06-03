@@ -52,20 +52,20 @@ astria-sequencer-client = { git = "https://github.com/astriaorg/astria", rev = "
 tonic_12 = { package = "tonic", version = "0.12" }
 pbjson-types_07 = { package = "pbjson-types", version = "0.7" }
 http_1 = { package = "http", version = "1" }
-penumbra-asset = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-asset", branch = "tct-graceful-witness" }
-penumbra-custody = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-custody", branch = "tct-graceful-witness" }
-penumbra-fee = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-fee", branch = "tct-graceful-witness" }
-penumbra-ibc = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-ibc", branch = "tct-graceful-witness" }
-penumbra-keys = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-keys", branch = "tct-graceful-witness" }
-penumbra-proto = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-proto", branch = "tct-graceful-witness", features = [
+penumbra-asset = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-asset", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
+penumbra-custody = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-custody", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
+penumbra-fee = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-fee", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
+penumbra-ibc = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-ibc", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
+penumbra-keys = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-keys", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
+penumbra-proto = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-proto", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a", features = [
     "box-grpc",
     "rpc",
 ] }
-penumbra-transaction = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-transaction", branch = "tct-graceful-witness", features = [
+penumbra-transaction = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-transaction", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a", features = [
     "download-proving-keys",
 ] }
-penumbra-wallet = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-wallet", branch = "tct-graceful-witness" }
-penumbra-view = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-view", branch = "tct-graceful-witness" }
+penumbra-wallet = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-wallet", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
+penumbra-view = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-view", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
 # Penumbra dependencies, specifically for Astria support. Renamespaced, to avoid conflicts with Penumbra support.
 penumbra-ibc-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-ibc", tag = "v0.69.1" }
 penumbra-proto-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-proto", tag = "v0.69.1", features = [
@@ -166,11 +166,11 @@ overflow-checks = true
 # deserializer tries hex first and falls back to base64, letting hermes
 # talk to noble (CometBFT 0.38.19) without bumping the whole tendermint
 # ecosystem.
-tendermint                       = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
-tendermint-rpc                   = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
-tendermint-proto                 = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
-tendermint-light-client          = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
-tendermint-light-client-verifier = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
-tendermint-light-client-detector = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
-tendermint-testgen               = { git = "https://github.com/rotkonetworks/tendermint-rs", branch = "apphash-base64-fallback" }
+tendermint                       = { git = "https://github.com/rotkonetworks/tendermint-rs", rev = "77416fd3125b8cc6951d867979bfb221dd2fd1fa" }
+tendermint-rpc                   = { git = "https://github.com/rotkonetworks/tendermint-rs", rev = "77416fd3125b8cc6951d867979bfb221dd2fd1fa" }
+tendermint-proto                 = { git = "https://github.com/rotkonetworks/tendermint-rs", rev = "77416fd3125b8cc6951d867979bfb221dd2fd1fa" }
+tendermint-light-client          = { git = "https://github.com/rotkonetworks/tendermint-rs", rev = "77416fd3125b8cc6951d867979bfb221dd2fd1fa" }
+tendermint-light-client-verifier = { git = "https://github.com/rotkonetworks/tendermint-rs", rev = "77416fd3125b8cc6951d867979bfb221dd2fd1fa" }
+tendermint-light-client-detector = { git = "https://github.com/rotkonetworks/tendermint-rs", rev = "77416fd3125b8cc6951d867979bfb221dd2fd1fa" }
+tendermint-testgen               = { git = "https://github.com/rotkonetworks/tendermint-rs", rev = "77416fd3125b8cc6951d867979bfb221dd2fd1fa" }
 
