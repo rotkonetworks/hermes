@@ -41,21 +41,23 @@ astria-sequencer-client = { git = "https://github.com/astriaorg/astria", rev = "
     "http",
 ] }
 
-# Penumbra dependencies.
-penumbra-asset = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e" }
-penumbra-custody = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e" }
-penumbra-fee = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e" }
-penumbra-ibc = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e" }
-penumbra-keys = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e" }
-penumbra-proto = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e", features = [
+# Penumbra dependencies. Pinned to penumbra v2.0.6 (chain pd 2.0.6 protocol).
+# Upstream renamespaced crates to penumbra-sdk-*; we keep the local name penumbra-*
+# via `package = ...` alias to minimize source churn.
+penumbra-asset = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-asset", tag = "v2.0.6" }
+penumbra-custody = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-custody", tag = "v2.0.6" }
+penumbra-fee = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-fee", tag = "v2.0.6" }
+penumbra-ibc = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-ibc", tag = "v2.0.6" }
+penumbra-keys = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-keys", tag = "v2.0.6" }
+penumbra-proto = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-proto", tag = "v2.0.6", features = [
     "box-grpc",
     "rpc",
 ] }
-penumbra-transaction = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e", features = [
+penumbra-transaction = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-transaction", tag = "v2.0.6", features = [
     "download-proving-keys",
 ] }
-penumbra-wallet = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e" }
-penumbra-view = { git = "https://github.com/penumbra-zone/penumbra", rev = "ac7abacc9bb09503d6fd6a396bc0b6850079084e" }
+penumbra-wallet = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-wallet", tag = "v2.0.6" }
+penumbra-view = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-sdk-view", tag = "v2.0.6" }
 # Penumbra dependencies, specifically for Astria support. Renamespaced, to avoid conflicts with Penumbra support.
 penumbra-ibc-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-ibc", tag = "v0.69.1" }
 penumbra-proto-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-proto", tag = "v0.69.1", features = [
