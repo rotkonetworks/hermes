@@ -393,7 +393,7 @@ impl PenumbraChain {
         let mut rsp =
             ViewClient::broadcast_transaction(view_client, transaction, wait_for_commit).await?;
 
-        let id = (async move {
+        let result = (async move {
             while let Some(rsp) = rsp.try_next().await? {
                 match rsp.status {
                     Some(status) => match status {
@@ -423,9 +423,15 @@ impl PenumbraChain {
         }
         .boxed())
         .await
-        .context("error broadcasting transaction")?;
+        .context("error broadcasting transaction");
 
-        Ok(id)
+        match result {
+            Ok(id) => Ok(id),
+            Err(e) => {
+                trigger_view_db_recovery_if_corrupted(&e);
+                Err(e)
+            }
+        }
     }
 
     async fn query_balance(
@@ -1757,6 +1763,82 @@ fn client_id_suffix(client_id: &ClientId) -> Option<u64> {
         .split('-')
         .last()
         .and_then(|e| e.parse::<u64>().ok())
+}
+
+/// Detect penumbra-pd rejections that signal local view-DB / SCT
+/// divergence and, if seen, wipe the view DB and exit so systemd
+/// can restart hermes with a clean resync.
+///
+/// Triggers:
+///   * "a spend proof did not verify"
+///     - check_stateless rejection. The local SCT view produced a
+///       witness or anchor that doesn't make the Groth16 verifier
+///       happy. Almost always a corrupt index/inner mismatch.
+///   * "is not a valid SCT root"
+///     - check_stateful rejection. The local SCT root for the
+///       claimed height doesn't match any root the chain ever had.
+///       Local view diverged from chain.
+///   * "Note commitment missing"
+///     - View service's own InvalidArgument: index says a
+///       commitment is witnessed but inner doesn't have it.
+///       Symptom of the same underlying corruption.
+///
+/// Background: under `penumbra-sdk` v2.0.6 with the rotko
+/// forward-port patches, hermes's view DB diverges from the chain
+/// SCT after ~1 hour of normal operation. Root cause is still
+/// being hunted in tct/view-sync. Until then, the practical
+/// recovery is: wipe relayer-view.sqlite, exit, let systemd
+/// respawn us with a clean ~5min resync.
+///
+/// This function never returns when a trigger string is matched;
+/// `std::process::exit(1)` ends the process. Returns normally
+/// otherwise so the caller can propagate the original error.
+fn trigger_view_db_recovery_if_corrupted(error: &anyhow::Error) {
+    // Walk the full error chain so we catch nested anyhow contexts
+    // and tonic status messages.
+    let mut combined = String::new();
+    for cause in error.chain() {
+        combined.push_str(&format!("{cause}\n"));
+    }
+
+    let triggers = [
+        "a spend proof did not verify",
+        "spend proof did not verify",
+        "is not a valid SCT root",
+        "Note commitment missing",
+    ];
+
+    let Some(matched) = triggers.iter().find(|t| combined.contains(*t)) else {
+        return;
+    };
+
+    tracing::error!(
+        trigger = matched,
+        full_error = %combined.trim_end(),
+        "VIEW_DB_CORRUPTED: penumbra rejected hermes-built tx with a \
+         signature of local SCT divergence. Wiping relayer-view.sqlite \
+         and exiting; systemd will restart hermes with a clean resync."
+    );
+
+    // The configured view-DB path is `view_service_storage_dir` from
+    // hermes config, defaulted to `~/.hermes` in practice. We don't
+    // have access to that config from here without a larger refactor,
+    // so use the documented production path. If the user has reconfigured
+    // it, this becomes a no-op delete (acceptable; the recovery just
+    // becomes an empty restart).
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let base = format!("{home}/.hermes/relayer-view.sqlite");
+    for suffix in ["", "-shm", "-wal"] {
+        let path = format!("{base}{suffix}");
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::error!(path, "removed view DB file"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::error!(path, error = %e, "failed to remove view DB file"),
+        }
+    }
+
+    tracing::error!("exiting with code 1 so systemd restarts hermes with a fresh view DB");
+    std::process::exit(1);
 }
 
 fn decode_merkle_proof(proof_bytes: Vec<u8>) -> Result<MerkleProof, Error> {
