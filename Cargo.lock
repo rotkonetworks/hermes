@@ -756,7 +756,7 @@ dependencies = [
  "bitflags 2.12.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.12.1",
  "proc-macro2 1.0.106",
  "quote",
  "regex",
@@ -1342,7 +1342,7 @@ dependencies = [
 [[package]]
 name = "cnidarium-component"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1801,7 +1801,7 @@ dependencies = [
 [[package]]
 name = "decaf377-fmd"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "ark-ff",
  "ark-serialize",
@@ -1815,7 +1815,7 @@ dependencies = [
 [[package]]
 name = "decaf377-frost"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -1845,7 +1845,7 @@ dependencies = [
 [[package]]
 name = "decaf377-ka"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "ark-ff",
  "decaf377 0.10.1",
@@ -2196,7 +2196,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2289,12 +2289,6 @@ name = "fixedbitset"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
-
-[[package]]
-name = "fixedbitset"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flex-error"
@@ -3220,7 +3214,7 @@ dependencies = [
  "tonic 0.12.3",
  "tracing",
  "tracing-subscriber 0.3.23",
- "uuid",
+ "uuid 1.23.2",
 ]
 
 [[package]]
@@ -4442,15 +4436,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4847,7 +4832,7 @@ dependencies = [
  "portable-atomic",
  "smallvec",
  "tagptr",
- "uuid",
+ "uuid 1.23.2",
 ]
 
 [[package]]
@@ -4889,7 +4874,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5307,9 +5292,9 @@ checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
 
 [[package]]
 name = "peg"
-version = "0.8.6"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0aad070be5b63aa72103f2fcdd70a83adbd5e90112ce5b574171ff1c65501773"
+checksum = "07c0b841ea54f523f7aa556956fbd293bcbe06f2e67d2eb732b7278aaf1d166a"
 dependencies = [
  "peg-macros",
  "peg-runtime",
@@ -5317,9 +5302,9 @@ dependencies = [
 
 [[package]]
 name = "peg-macros"
-version = "0.8.6"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd8ef6825cae95355031ae26a99b616a2a21f22ba2de0197c43dfb05acbe7ee"
+checksum = "b5aa52829b8decbef693af90202711348ab001456803ba2a98eb4ec8fb70844c"
 dependencies = [
  "peg-runtime",
  "proc-macro2 1.0.106",
@@ -5328,9 +5313,9 @@ dependencies = [
 
 [[package]]
 name = "peg-runtime"
-version = "0.8.6"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7011d97b484a5ebdc4b1fdb3b12d5e4bbbea56e9d22b688f2e79e04b65a7d8a6"
+checksum = "c719dcf55f09a3a7e764c6649ab594c18a177e3599c467983cdf644bfc0a4088"
 
 [[package]]
 name = "penumbra-asset"
@@ -5552,7 +5537,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-app"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5621,7 +5606,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-asset"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5661,7 +5646,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-auction"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5706,7 +5691,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-community-pool"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5736,7 +5721,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-compact-block"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5767,7 +5752,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-custody"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5803,7 +5788,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-dex"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5857,7 +5842,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-distributions"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5873,7 +5858,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-fee"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5900,7 +5885,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-funding"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-groth16",
@@ -5931,7 +5916,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-governance"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -5980,7 +5965,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-ibc"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6016,7 +6001,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-keys"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "aes",
  "anyhow",
@@ -6060,7 +6045,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-num"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6096,7 +6081,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-proof-params"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ec",
@@ -6125,7 +6110,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-proto"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6157,7 +6142,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-sct"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6194,7 +6179,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-shielded-pool"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6246,7 +6231,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-stake"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6287,7 +6272,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-tct"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "ark-ed-on-bls12-377",
  "ark-ff",
@@ -6316,7 +6301,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-tower-trace"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "futures",
  "hex",
@@ -6338,7 +6323,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-transaction"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-ff",
@@ -6391,7 +6376,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-txhash"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "blake2b_simd 1.0.4",
@@ -6405,7 +6390,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-view"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-std",
@@ -6465,7 +6450,7 @@ dependencies = [
 [[package]]
 name = "penumbra-sdk-wallet"
 version = "2.0.6"
-source = "git+https://github.com/rotkonetworks/penumbra?branch=tct-graceful-witness#ee62a2628c256bbded98afa1681520774555cd6c"
+source = "git+https://github.com/rotkonetworks/penumbra?rev=e7915586e70c6c009f634047bd0b310b22da33de#e7915586e70c6c009f634047bd0b310b22da33de"
 dependencies = [
  "anyhow",
  "ark-std",
@@ -6551,17 +6536,7 @@ version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
 dependencies = [
- "fixedbitset 0.4.2",
- "indexmap 2.14.0",
-]
-
-[[package]]
-name = "petgraph"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
-dependencies = [
- "fixedbitset 0.5.7",
+ "fixedbitset",
  "indexmap 2.14.0",
 ]
 
@@ -6943,12 +6918,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
 dependencies = [
  "bytes",
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools 0.12.1",
  "log",
  "multimap",
  "once_cell",
- "petgraph 0.6.5",
+ "petgraph",
  "prettyplease",
  "prost 0.12.6",
  "prost-types 0.12.6",
@@ -6963,12 +6938,12 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
- "heck 0.5.0",
- "itertools 0.14.0",
+ "heck 0.4.1",
+ "itertools 0.12.1",
  "log",
  "multimap",
  "once_cell",
- "petgraph 0.7.1",
+ "petgraph",
  "prettyplease",
  "prost 0.13.5",
  "prost-types 0.13.5",
@@ -7010,7 +6985,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.12.1",
  "proc-macro2 1.0.106",
  "quote",
  "syn 2.0.117",
@@ -7080,7 +7055,7 @@ checksum = "eb14dba8247a6a15b7fdbc7d389e2e6f03ee9f184f87117706d509c092dfe846"
 dependencies = [
  "r2d2",
  "rusqlite",
- "uuid",
+ "uuid 1.23.2",
 ]
 
 [[package]]
@@ -7447,7 +7422,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8081,9 +8056,9 @@ dependencies = [
 
 [[package]]
 name = "simple-error"
-version = "0.3.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69da7c8ef9e55986dcaa55dd095bbf7d321e80cc91644f25ce26a83dbe9e7f14"
+checksum = "cc47a29ce97772ca5c927f75bac34866b16d64e07f330c3248e2d7226623901b"
 
 [[package]]
 name = "sized-chunks"
@@ -8348,14 +8323,13 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "tendermint"
 version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15ab8f0a25d0d2ad49ac615da054d6a76aa6603ff95f7d18bafdd34450a1a04b"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?rev=77416fd3125b8cc6951d867979bfb221dd2fd1fa#77416fd3125b8cc6951d867979bfb221dd2fd1fa"
 dependencies = [
  "bytes",
  "digest 0.10.7",
@@ -8413,8 +8387,7 @@ dependencies = [
 [[package]]
 name = "tendermint-config"
 version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1a02da769166e2052cd537b1a97c78017632c2d9e19266367b27e73910434fc"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?rev=77416fd3125b8cc6951d867979bfb221dd2fd1fa#77416fd3125b8cc6951d867979bfb221dd2fd1fa"
 dependencies = [
  "flex-error",
  "serde",
@@ -8427,8 +8400,7 @@ dependencies = [
 [[package]]
 name = "tendermint-light-client"
 version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc60a09541be13b8f8be305c260eb6144e48e01299302f71956c6e5284f2e4d6"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?rev=77416fd3125b8cc6951d867979bfb221dd2fd1fa#77416fd3125b8cc6951d867979bfb221dd2fd1fa"
 dependencies = [
  "contracts",
  "crossbeam-channel 0.4.4",
@@ -8452,9 +8424,9 @@ dependencies = [
 [[package]]
 name = "tendermint-light-client-detector"
 version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6af616fb578fec00cb6466d57718ad962de8482e77a7b647f4c8acf3538913e4"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?rev=77416fd3125b8cc6951d867979bfb221dd2fd1fa#77416fd3125b8cc6951d867979bfb221dd2fd1fa"
 dependencies = [
+ "contracts",
  "crossbeam-channel 0.4.4",
  "derive_more",
  "flex-error",
@@ -8475,8 +8447,7 @@ dependencies = [
 [[package]]
 name = "tendermint-light-client-verifier"
 version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b8090d0eef9ad57b1b913b5e358e26145c86017e87338136509b94383a4af25"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?rev=77416fd3125b8cc6951d867979bfb221dd2fd1fa#77416fd3125b8cc6951d867979bfb221dd2fd1fa"
 dependencies = [
  "derive_more",
  "flex-error",
@@ -8501,8 +8472,7 @@ dependencies = [
 [[package]]
 name = "tendermint-proto"
 version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b797dd3d2beaaee91d2f065e7bdf239dc8d80bba4a183a288bc1279dd5a69a1e"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?rev=77416fd3125b8cc6951d867979bfb221dd2fd1fa#77416fd3125b8cc6951d867979bfb221dd2fd1fa"
 dependencies = [
  "bytes",
  "flex-error",
@@ -8534,8 +8504,7 @@ dependencies = [
 [[package]]
 name = "tendermint-rpc"
 version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71afae8bb5f6b14ed48d4e1316a643b6c2c3cbad114f510be77b4ed20b7b3e42"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?rev=77416fd3125b8cc6951d867979bfb221dd2fd1fa#77416fd3125b8cc6951d867979bfb221dd2fd1fa"
 dependencies = [
  "async-trait",
  "async-tungstenite",
@@ -8545,7 +8514,6 @@ dependencies = [
  "getrandom 0.2.17",
  "peg",
  "pin-project",
- "rand 0.8.6",
  "reqwest 0.11.27",
  "semver",
  "serde",
@@ -8561,15 +8529,14 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "uuid",
+ "uuid 0.8.2",
  "walkdir",
 ]
 
 [[package]]
 name = "tendermint-testgen"
 version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae652e9e8b23f27f6a4fbeb29ead22ff4c2256b8d32df226b73258ba2a4ce11e"
+source = "git+https://github.com/rotkonetworks/tendermint-rs?rev=77416fd3125b8cc6951d867979bfb221dd2fd1fa#77416fd3125b8cc6951d867979bfb221dd2fd1fa"
 dependencies = [
  "ed25519-consensus",
  "gumdrop",
@@ -9384,6 +9351,12 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
+
+[[package]]
+name = "uuid"
 version = "1.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d258b83ceec21034727ecee8c382cfa6c3e133699b0742c64571814fb420c9f7"
@@ -9614,7 +9587,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -10120,38 +10093,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "tendermint"
-version = "0.34.0"
-source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
-
-[[patch.unused]]
-name = "tendermint-light-client"
-version = "0.34.0"
-source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
-
-[[patch.unused]]
-name = "tendermint-light-client-detector"
-version = "0.34.0"
-source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
-
-[[patch.unused]]
-name = "tendermint-light-client-verifier"
-version = "0.34.0"
-source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
-
-[[patch.unused]]
-name = "tendermint-proto"
-version = "0.34.0"
-source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
-
-[[patch.unused]]
-name = "tendermint-rpc"
-version = "0.34.0"
-source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"
-
-[[patch.unused]]
-name = "tendermint-testgen"
-version = "0.34.0"
-source = "git+https://github.com/rotkonetworks/tendermint-rs?branch=apphash-base64-fallback#f29d2547e2aab5b2eca8c727fb4e42b784f8fefb"

@@ -52,20 +52,20 @@ astria-sequencer-client = { git = "https://github.com/astriaorg/astria", rev = "
 tonic_12 = { package = "tonic", version = "0.12" }
 pbjson-types_07 = { package = "pbjson-types", version = "0.7" }
 http_1 = { package = "http", version = "1" }
-penumbra-asset = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-asset", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
-penumbra-custody = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-custody", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
-penumbra-fee = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-fee", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
-penumbra-ibc = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-ibc", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
-penumbra-keys = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-keys", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
-penumbra-proto = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-proto", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a", features = [
+penumbra-asset = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-asset", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
+penumbra-custody = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-custody", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
+penumbra-fee = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-fee", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
+penumbra-ibc = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-ibc", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
+penumbra-keys = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-keys", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
+penumbra-proto = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-proto", rev = "e7915586e70c6c009f634047bd0b310b22da33de", features = [
     "box-grpc",
     "rpc",
 ] }
-penumbra-transaction = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-transaction", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a", features = [
+penumbra-transaction = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-transaction", rev = "e7915586e70c6c009f634047bd0b310b22da33de", features = [
     "download-proving-keys",
 ] }
-penumbra-wallet = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-wallet", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
-penumbra-view = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-view", rev = "ae57546dde9af4adf9f6f1ee6fc98325adcf997a" }
+penumbra-wallet = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-wallet", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
+penumbra-view = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-view", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
 # Penumbra dependencies, specifically for Astria support. Renamespaced, to avoid conflicts with Penumbra support.
 penumbra-ibc-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-ibc", tag = "v0.69.1" }
 penumbra-proto-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-proto", tag = "v0.69.1", features = [
