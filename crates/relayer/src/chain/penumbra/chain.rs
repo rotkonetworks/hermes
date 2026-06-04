@@ -704,6 +704,22 @@ impl ChainEndpoint for PenumbraChain {
             .block_on(self.tendermint_rpc_client.broadcast_tx_sync(tx_bytes))
             .map_err(|e| Error::rpc(self.config.rpc_addr.clone(), e))?;
 
+        // pd's CheckTx returns code 0 on accept; anything else is a
+        // rejection with a structured `log` field. Inspect the log
+        // for SCT-divergence signatures and auto-recover (wipe view
+        // DB + exit so systemd respawns with a clean resync).
+        //
+        // We only have to do this on the check_tx path because the
+        // wait_commit path goes through `submit_transaction`, which
+        // already invokes the same trigger.
+        if u32::from(res.code) != 0 {
+            trigger_view_db_recovery_if_corrupted(&anyhow::anyhow!(
+                "broadcast_tx_sync to penumbra returned code {}: {}",
+                u32::from(res.code),
+                res.log
+            ));
+        }
+
         Ok(vec![res])
     }
 
