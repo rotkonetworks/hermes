@@ -65,7 +65,7 @@ penumbra-transaction = { git = "https://github.com/rotkonetworks/penumbra", pack
     "download-proving-keys",
 ] }
 penumbra-wallet = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-wallet", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
-penumbra-view = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-view", rev = "e7915586e70c6c009f634047bd0b310b22da33de" }
+penumbra-view = { git = "https://github.com/rotkonetworks/penumbra", package = "penumbra-sdk-view", rev = "e7915586e70c6c009f634047bd0b310b22da33de", features = ["sct-divergence-check"] }
 # Penumbra dependencies, specifically for Astria support. Renamespaced, to avoid conflicts with Penumbra support.
 penumbra-ibc-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-ibc", tag = "v0.69.1" }
 penumbra-proto-astria = { git = "https://github.com/penumbra-zone/penumbra", package = "penumbra-proto", tag = "v0.69.1", features = [
