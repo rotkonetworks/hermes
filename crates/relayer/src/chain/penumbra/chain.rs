@@ -362,6 +362,14 @@ impl PenumbraChain {
         let view_client = self.view_client.lock().await.clone();
         let tx = self.build_penumbra_tx(tracked_msgs).await.map_err(|e| {
             tracing::error!("error building penumbra transaction: {}", e);
+            // The view-service witness RPC can return InvalidArgument("Note
+            // commitment missing") when the local SCT index says a commitment
+            // is witnessed but the inner tree doesn't have a witness for it.
+            // That's the same family of SCT-divergence symptoms as the
+            // submit-side rejections handled in `submit_transaction`. Fire the
+            // recovery here too so we don't silently miss it (the build path
+            // never reaches `submit_transaction`).
+            trigger_view_db_recovery_if_corrupted(&e);
             Error::temp_penumbra_error(e.to_string())
         })?;
 
@@ -754,6 +762,10 @@ impl ChainEndpoint for PenumbraChain {
             .block_on(self.build_penumbra_tx(tracked_msgs.clone()))
             .map_err(|e| {
                 tracing::error!("error building penumbra transaction: {}", e);
+                // See the matching call in `send_messages_in_penumbratx` —
+                // the build path bypasses `submit_transaction`, so we need
+                // to inspect this error for SCT-divergence signatures here.
+                trigger_view_db_recovery_if_corrupted(&e);
                 Error::temp_penumbra_error(e.to_string())
             })?;
 
