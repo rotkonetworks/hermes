@@ -98,6 +98,24 @@ use crate::{
 
 use super::config::PenumbraConfig;
 
+use std::collections::HashMap;
+use std::sync::{Mutex as StdMutex, OnceLock};
+
+/// Process-wide cache of `ViewServer` instances keyed by
+/// `(view_db_path, grpc_addr)`.
+///
+/// See the rationale in `Self::bootstrap` where this cache is consulted.
+/// The TL;DR is that the hermes supervisor calls `Penumbra::bootstrap`
+/// multiple times per startup (and again on every failed bootstrap),
+/// each call spawns a fresh `ViewServer` worker, and multiple workers
+/// against the same SQLite view DB race on `sync_height` writes — which
+/// causes both the `Wrong block height` log spam and the downstream SCT
+/// root divergence that breaks ack relay.
+fn view_server_cache() -> &'static StdMutex<HashMap<(String, String), ViewServer>> {
+    static CACHE: OnceLock<StdMutex<HashMap<(String, String), ViewServer>>> = OnceLock::new();
+    CACHE.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
 pub struct PenumbraChain {
     config: PenumbraConfig,
     rt: Arc<TokioRuntime>,
@@ -514,14 +532,55 @@ impl ChainEndpoint for PenumbraChain {
 
         // No support for custom registry.json files in Hermes yet.
         let registry_path: Option<String> = None;
-        let svc = rt
-            .block_on(ViewServer::load_or_initialize(
-                view_file,
-                registry_path,
-                &fvk,
-                config.grpc_addr.clone().into(),
-            ))
-            .map_err(|e| Error::temp_penumbra_error(e.to_string()))?;
+
+        // Cache the ViewServer per (view_file, grpc_addr) so repeated
+        // bootstrap calls share the same background scanning worker.
+        //
+        // Why this matters: Penumbra::bootstrap is invoked at least four
+        // times per supervisor startup (health_check, scan.chain,
+        // scan.channel counterparty resolution, init_subscriptions) and is
+        // re-invoked whenever an earlier bootstrap returned Err — including
+        // transient errors that originate inside the spawned worker, which
+        // continues running even though the outer bootstrap unwinds.
+        //
+        // Without this cache, each bootstrap call constructs a fresh
+        // ViewServer, which in turn calls Storage::load_or_initialize and
+        // tokio::spawn(worker.run()). Those workers all hold their own
+        // `Arc<Mutex<uncommitted_height>>`, but they all write to the same
+        // SQLite file. The result is multiple workers racing on
+        // `sync_height`, which manifests as the recurring
+        // `Wrong block height N for latest sync height M` errors and,
+        // downstream, the SCT-root divergence that makes pd reject our
+        // spend proofs.
+        //
+        // ViewServer is `#[derive(Clone)]` precisely so callers can share a
+        // single scanning task across multiple chain runtimes; we just need
+        // to keep one copy around.
+        let cache_key = (
+            view_file.clone().unwrap_or_default(),
+            config.grpc_addr.to_string(),
+        );
+        let svc = {
+            let mut cache = view_server_cache().lock().expect("view server cache mutex poisoned");
+            if let Some(cached) = cache.get(&cache_key) {
+                tracing::info!(
+                    view_file = ?view_file,
+                    "reusing cached penumbra ViewServer (single scanning worker)"
+                );
+                cached.clone()
+            } else {
+                let svc = rt
+                    .block_on(ViewServer::load_or_initialize(
+                        view_file.clone(),
+                        registry_path,
+                        &fvk,
+                        config.grpc_addr.clone().into(),
+                    ))
+                    .map_err(|e| Error::temp_penumbra_error(e.to_string()))?;
+                cache.insert(cache_key, svc.clone());
+                svc
+            }
+        };
 
         let svc = ViewServiceServer::new(svc);
         let mut view_client = ViewServiceClient::new(box_grpc_svc::local(svc));
