@@ -116,11 +116,47 @@ fn view_server_cache() -> &'static StdMutex<HashMap<(String, String), ViewServer
     CACHE.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
+/// Decision made at bootstrap about how (or whether) to bootstrap the
+/// view server.
+enum ViewMode {
+    /// This process is the daemon holding the exclusive view-DB lock; the
+    /// view worker syncs against the configured sqlite file. Full
+    /// functionality.
+    File(String),
+    /// Config didn't specify a `view_service_storage_dir`; use an in-memory
+    /// view DB. Worker syncs from genesis on every process start. Fine for
+    /// tests and isolated runs.
+    InMemory,
+    /// Another hermes process already holds the file lock. We do NOT
+    /// construct a ViewServer at all — bootstrap is essentially free.
+    /// Methods that need view_client will fail fast.
+    Skipped,
+}
+
+/// Standard error returned by view-requiring methods when this process
+/// did not bootstrap a view server (e.g. it's a transient CLI invocation
+/// while the daemon owns the view DB).
+fn view_unavailable_err(operation: &str) -> Error {
+    Error::temp_penumbra_error(format!(
+        "{operation} requires the penumbra view server, which is owned by another \
+         hermes process (the daemon). Either run this operation against the \
+         daemon's existing process, or stop the daemon first."
+    ))
+}
+
 pub struct PenumbraChain {
     config: PenumbraConfig,
     rt: Arc<TokioRuntime>,
 
-    view_client: Mutex<ViewServiceClient<BoxGrpcService>>,
+    // None when this process is NOT the daemon holding the view-DB flock.
+    // Sub-processes (`hermes query …`, `hermes health-check`, etc.) get
+    // None so they don't bootstrap a view-server worker at all — they just
+    // use the IBC gRPC clients directly. Methods that genuinely need the
+    // view (`build_penumbra_tx`, `query_balance`, `health_check`) fail fast
+    // when this is None, with an error directing the operator to run the
+    // operation against the daemon's RPC instead of spawning a competing
+    // hermes process.
+    view_client: Option<Mutex<ViewServiceClient<BoxGrpcService>>>,
     custody_client: CustodyServiceClient<BoxGrpcService>,
 
     ibc_client_grpc_client: IbcClientQueryClient<tonic::transport::Channel>,
@@ -312,7 +348,11 @@ impl PenumbraChain {
         &mut self,
         tracked_msgs: TrackedMsgs,
     ) -> Result<penumbra_transaction::Transaction, anyhow::Error> {
-        let mut view_client = self.view_client.lock().await.clone();
+        let view_client_mutex = self
+            .view_client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("build_penumbra_tx: view server not bootstrapped"))?;
+        let mut view_client = view_client_mutex.lock().await.clone();
         let gas_prices = view_client
             .gas_prices(GasPricesRequest {})
             .await
@@ -359,7 +399,11 @@ impl PenumbraChain {
         tracked_msgs: TrackedMsgs,
         wait_for_commit: bool,
     ) -> Result<penumbra_transaction::txhash::TransactionId, Error> {
-        let view_client = self.view_client.lock().await.clone();
+        let view_client_mutex = self
+            .view_client
+            .as_ref()
+            .ok_or_else(|| view_unavailable_err("send_messages_in_penumbratx"))?;
+        let view_client = view_client_mutex.lock().await.clone();
         let tx = self.build_penumbra_tx(tracked_msgs).await.map_err(|e| {
             tracing::error!("error building penumbra transaction: {}", e);
             // The view-service witness RPC can return InvalidArgument("Note
@@ -465,7 +509,11 @@ impl PenumbraChain {
         address_index: AddressIndex,
         denom: &str,
     ) -> Result<crate::account::Balance, anyhow::Error> {
-        let mut view_client = self.view_client.lock().await.clone();
+        let view_client_mutex = self
+            .view_client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("query_balance: view server not bootstrapped"))?;
+        let mut view_client = view_client_mutex.lock().await.clone();
         let assets = ViewClient::assets(&mut view_client).await?;
         let asset_id = assets
             .get_unit(denom)
@@ -539,7 +587,26 @@ impl ChainEndpoint for PenumbraChain {
         // lock held and silently falls back to an in-memory view DB — slower
         // per-invocation but DB-isolated from the daemon, so the daemon's
         // view stays canonical.
-        let view_file: Option<String> = match config.view_service_storage_dir {
+        // CRITICAL: only ONE process can safely write to the file-based view DB
+        // at a time. The upstream penumbra-sdk-view 2.0.6 view worker has no
+        // cross-process coordination: each process opens its own r2d2 pool and
+        // races on `UPDATE sync_height`, producing the cascading
+        // "Wrong block height N for latest sync height M" / SCT divergence
+        // failures we hit in production. Operationally that meant every
+        // `hermes query`, `hermes health-check`, dashboard query, ibc-monitor
+        // probe, etc. silently corrupted the daemon's view DB.
+        //
+        // We gate file-backed view bootstrap on acquiring an exclusive POSIX
+        // flock on a sibling lock file. The daemon (`hermes start`) grabs the
+        // lock first and holds it for the lifetime of the process. Any
+        // subsequent invocation finds the lock held and switches to "skip"
+        // mode: NO ViewServer is constructed and NO worker is spawned, so
+        // there is zero contention with the daemon's view DB. Methods that
+        // genuinely need the view fail fast (see `require_view_client`);
+        // pure-gRPC operations (every `hermes query …` subcommand, all the
+        // IBC client/connection/channel reads) work normally because they
+        // never touch view_client.
+        let view_mode: ViewMode = match config.view_service_storage_dir {
             Some(ref dir_string) => {
                 let p = PathBuf::from(dir_string)
                     .join("relayer-view.sqlite")
@@ -554,79 +621,80 @@ impl ChainEndpoint for PenumbraChain {
                             lock_path = %lock_path,
                             "acquired exclusive lock on view DB; using file-backed view"
                         );
-                        Some(p)
+                        ViewMode::File(p)
                     }
                     Err(e) => {
                         tracing::warn!(
                             view_file = %p,
                             lock_path = %lock_path,
                             error = %e,
-                            "view DB lock held by another process; falling back to in-memory view DB"
+                            "view DB lock held by another process; skipping view-server \
+                             bootstrap. Operations that need the view (build tx, balance, \
+                             health-check) will fail; pure gRPC queries (query packet/client \
+                             state, etc.) still work."
                         );
-                        None
+                        ViewMode::Skipped
                     }
                 }
             }
             None => {
                 tracing::warn!("using in-memory view database for penumbra; consider setting 'view_service_storage_dir'");
-                None
+                ViewMode::InMemory
             }
         };
 
         // No support for custom registry.json files in Hermes yet.
         let registry_path: Option<String> = None;
 
-        // Cache the ViewServer per (view_file, grpc_addr) so repeated
-        // bootstrap calls share the same background scanning worker.
-        //
-        // Why this matters: Penumbra::bootstrap is invoked at least four
-        // times per supervisor startup (health_check, scan.chain,
-        // scan.channel counterparty resolution, init_subscriptions) and is
-        // re-invoked whenever an earlier bootstrap returned Err — including
-        // transient errors that originate inside the spawned worker, which
-        // continues running even though the outer bootstrap unwinds.
-        //
-        // Without this cache, each bootstrap call constructs a fresh
-        // ViewServer, which in turn calls Storage::load_or_initialize and
-        // tokio::spawn(worker.run()). Those workers all hold their own
-        // `Arc<Mutex<uncommitted_height>>`, but they all write to the same
-        // SQLite file. The result is multiple workers racing on
-        // `sync_height`, which manifests as the recurring
-        // `Wrong block height N for latest sync height M` errors and,
-        // downstream, the SCT-root divergence that makes pd reject our
-        // spend proofs.
-        //
-        // ViewServer is `#[derive(Clone)]` precisely so callers can share a
-        // single scanning task across multiple chain runtimes; we just need
-        // to keep one copy around.
-        let cache_key = (
-            view_file.clone().unwrap_or_default(),
-            config.grpc_addr.to_string(),
-        );
-        let svc = {
-            let mut cache = view_server_cache().lock().expect("view server cache mutex poisoned");
-            if let Some(cached) = cache.get(&cache_key) {
-                tracing::info!(
-                    view_file = ?view_file,
-                    "reusing cached penumbra ViewServer (single scanning worker)"
+        // Construct the view client ONLY when this process is the daemon (or
+        // when the config explicitly asks for in-memory). For Skipped mode
+        // we leave it as None — bootstrap finishes cheaply, no worker
+        // spawned, no DB ever touched.
+        let view_client: Option<ViewServiceClient<BoxGrpcService>> = match &view_mode {
+            ViewMode::Skipped => None,
+            ViewMode::File(_) | ViewMode::InMemory => {
+                let view_file: Option<String> = match &view_mode {
+                    ViewMode::File(p) => Some(p.clone()),
+                    ViewMode::InMemory => None,
+                    ViewMode::Skipped => unreachable!(),
+                };
+
+                // Cache the ViewServer per (view_file, grpc_addr) so repeated
+                // bootstrap calls within the same process share the same
+                // worker. (See historical commentary: this was the original
+                // mitigation for in-process worker proliferation; the new
+                // cross-process flock makes inter-process races impossible,
+                // but the in-process cache is still useful.)
+                let cache_key = (
+                    view_file.clone().unwrap_or_default(),
+                    config.grpc_addr.to_string(),
                 );
-                cached.clone()
-            } else {
-                let svc = rt
-                    .block_on(ViewServer::load_or_initialize(
-                        view_file.clone(),
-                        registry_path,
-                        &fvk,
-                        config.grpc_addr.clone().into(),
-                    ))
-                    .map_err(|e| Error::temp_penumbra_error(e.to_string()))?;
-                cache.insert(cache_key, svc.clone());
-                svc
+                let svc = {
+                    let mut cache = view_server_cache().lock().expect("view server cache mutex poisoned");
+                    if let Some(cached) = cache.get(&cache_key) {
+                        tracing::info!(
+                            view_file = ?view_file,
+                            "reusing cached penumbra ViewServer (single scanning worker)"
+                        );
+                        cached.clone()
+                    } else {
+                        let svc = rt
+                            .block_on(ViewServer::load_or_initialize(
+                                view_file.clone(),
+                                registry_path,
+                                &fvk,
+                                config.grpc_addr.clone().into(),
+                            ))
+                            .map_err(|e| Error::temp_penumbra_error(e.to_string()))?;
+                        cache.insert(cache_key, svc.clone());
+                        svc
+                    }
+                };
+
+                let svc = ViewServiceServer::new(svc);
+                Some(ViewServiceClient::new(box_grpc_svc::local(svc)))
             }
         };
-
-        let svc = ViewServiceServer::new(svc);
-        let mut view_client = ViewServiceClient::new(box_grpc_svc::local(svc));
 
         let soft_kms = penumbra_custody::soft_kms::SoftKms::new(config.kms_config.clone());
         let custody_svc = CustodyServiceServer::new(soft_kms);
@@ -662,20 +730,27 @@ impl ChainEndpoint for PenumbraChain {
         // trusting period in terms of blocks instead of duration.
         let unbonding_period = Duration::from_secs(unbonding_delay * 5);
 
-        tracing::info!("starting view service sync");
-
-        let sync_height = rt
-            .block_on(async {
-                let mut stream = ViewClient::status_stream(&mut view_client).await?;
-                let mut sync_height = 0u64;
-                while let Some(status) = stream.next().await.transpose()? {
-                    sync_height = status.full_sync_height;
-                }
-                Ok(sync_height)
-            })
-            .map_err(|e: anyhow::Error| Error::temp_penumbra_error(e.to_string()))?;
-
-        tracing::info!(?sync_height, "view service sync complete");
+        // Wait for view sync ONLY when we have a view_client. Skipped-mode
+        // sub-processes return immediately so commands like `hermes query
+        // packet pending` and `hermes query client state` start in O(ms)
+        // instead of blocking on a (now never-completing) status stream.
+        if let Some(view_client) = view_client.as_ref() {
+            tracing::info!("starting view service sync");
+            let mut view_client = view_client.clone();
+            let sync_height = rt
+                .block_on(async {
+                    let mut stream = ViewClient::status_stream(&mut view_client).await?;
+                    let mut sync_height = 0u64;
+                    while let Some(status) = stream.next().await.transpose()? {
+                        sync_height = status.full_sync_height;
+                    }
+                    Ok(sync_height)
+                })
+                .map_err(|e: anyhow::Error| Error::temp_penumbra_error(e.to_string()))?;
+            tracing::info!(?sync_height, "view service sync complete");
+        } else {
+            tracing::info!("skipping view service sync (sub-process, no view bootstrapped)");
+        }
 
         let ibc_client_grpc_client = rt
             .block_on(IbcClientQueryClient::connect(grpc_addr.clone()))
@@ -694,7 +769,7 @@ impl ChainEndpoint for PenumbraChain {
         Ok(Self {
             config,
             rt,
-            view_client: Mutex::new(view_client.clone()),
+            view_client: view_client.map(Mutex::new),
             custody_client,
             tendermint_rpc_client: rpc_client,
             tendermint_light_client,
@@ -717,7 +792,15 @@ impl ChainEndpoint for PenumbraChain {
     }
 
     fn health_check(&mut self) -> Result<HealthCheck, Error> {
-        let mut view_client = self.rt.block_on(self.view_client.lock()).clone();
+        let Some(view_client_mutex) = self.view_client.as_ref() else {
+            // Sub-process without a view server. Health-check is a
+            // daemon-state question, so just report unhealthy with an
+            // operator-friendly message rather than spinning up a view.
+            return Ok(HealthCheck::Unhealthy(Box::new(view_unavailable_err(
+                "health_check",
+            ))));
+        };
+        let mut view_client = self.rt.block_on(view_client_mutex.lock()).clone();
         let catching_up = self
             .rt
             .block_on(async {
