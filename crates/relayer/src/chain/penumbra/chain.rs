@@ -689,7 +689,16 @@ impl ChainEndpoint for PenumbraChain {
                 let status = ViewClient::status(&mut view_client).await?;
                 Ok(status.catching_up)
             })
-            .map_err(|e: anyhow::Error| Error::temp_penumbra_error(e.to_string()))?;
+            .map_err(|e: anyhow::Error| {
+                // Periodic health checks are the most reliable path to
+                // catch a stuck worker during idle operation (when no
+                // packets are in flight). The view RPC returns
+                // "Worker failed: <error>" via service.rs:check_worker
+                // whenever error_slot is set, so SCT-divergence and
+                // sync_height-drift signatures land here.
+                trigger_view_db_recovery_if_corrupted(&e);
+                Error::temp_penumbra_error(e.to_string())
+            })?;
 
         if catching_up {
             Ok(HealthCheck::Unhealthy(Box::new(
@@ -1893,6 +1902,14 @@ fn trigger_view_db_recovery_if_corrupted(error: &anyhow::Error) {
         "spend proof did not verify",
         "is not a valid SCT root",
         "Note commitment missing",
+        // Caught by the in-process sct_divergence_check feature in
+        // penumbra-sdk-view. Without this trigger, the worker bails
+        // every 10s in a divergence loop but never wipes the view DB,
+        // leaving Noble->Penumbra relaying stuck indefinitely.
+        "SCT divergence detected at height",
+        // Storage layer's symptom of the same root cause (worker mutated
+        // SCT then storage bailed due to stale sync_height read).
+        "Wrong block height",
     ];
 
     let Some(matched) = triggers.iter().find(|t| combined.contains(*t)) else {
