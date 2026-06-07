@@ -522,6 +522,23 @@ impl ChainEndpoint for PenumbraChain {
         // Identify filepath for storing Penumbra view database locally.
         // The directory might not be specified, in which case we'll preserve None,
         // which causes the ViewServiceClient to use an in-memory database.
+        //
+        // CRITICAL: only ONE process can safely write to the file-based view DB
+        // at a time. The upstream penumbra-sdk-view 2.0.6 view worker has no
+        // cross-process coordination: each process opens its own r2d2 pool and
+        // races on `UPDATE sync_height`, producing the cascading
+        // "Wrong block height N for latest sync height M" / SCT divergence
+        // failures we hit in production. Operationally that meant every
+        // `hermes query`, `hermes health-check`, dashboard query, ibc-monitor
+        // probe, etc. silently corrupted the daemon's view DB.
+        //
+        // We solve this here by gating use of the file DB on an exclusive
+        // POSIX flock on a sibling lock file. The daemon (`hermes start`)
+        // grabs the lock first and holds it for the lifetime of the process.
+        // Any subsequent invocation that bootstraps a PenumbraChain finds the
+        // lock held and silently falls back to an in-memory view DB — slower
+        // per-invocation but DB-isolated from the daemon, so the daemon's
+        // view stays canonical.
         let view_file: Option<String> = match config.view_service_storage_dir {
             Some(ref dir_string) => {
                 let p = PathBuf::from(dir_string)
@@ -529,8 +546,26 @@ impl ChainEndpoint for PenumbraChain {
                     .to_str()
                     .ok_or_else(|| Error::temp_penumbra_error("Non-UTF8 view path".to_owned()))?
                     .to_owned();
-                tracing::info!("using view database at {}", p);
-                Some(p)
+                let lock_path = format!("{p}.lock");
+                match acquire_view_db_lock(&lock_path) {
+                    Ok(()) => {
+                        tracing::info!(
+                            view_file = %p,
+                            lock_path = %lock_path,
+                            "acquired exclusive lock on view DB; using file-backed view"
+                        );
+                        Some(p)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            view_file = %p,
+                            lock_path = %lock_path,
+                            error = %e,
+                            "view DB lock held by another process; falling back to in-memory view DB"
+                        );
+                        None
+                    }
+                }
             }
             None => {
                 tracing::warn!("using in-memory view database for penumbra; consider setting 'view_service_storage_dir'");
@@ -2005,4 +2040,34 @@ async fn fetch_node_info(
         .await
         .map(|s| s.node_info)
         .map_err(|e| Error::rpc(config.rpc_addr.clone(), e))
+}
+
+/// Try to acquire an exclusive lock on the view-DB lock file. On success,
+/// intentionally leak the open file handle so the kernel keeps the lock for
+/// the lifetime of this process. On failure (another process already holds
+/// the lock), return an error so the caller can fall back to an in-memory
+/// view DB.
+///
+/// We use `fs2::FileExt::try_lock_exclusive`, which on Unix is `flock(2)`
+/// (locks the file *description*, doesn't get released by an unrelated
+/// `close()` on a sibling fd) and on Windows is `LockFileEx`. The
+/// non-blocking variant returns `WouldBlock` if another process holds it.
+fn acquire_view_db_lock(lock_path: &str) -> Result<(), std::io::Error> {
+    use fs2::FileExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+
+    file.try_lock_exclusive()?;
+
+    // Lock held. Leak the handle so the kernel retains the lock for the
+    // process lifetime; the OS will drop it on exit. This is intentional —
+    // calling `drop(file)` would release the lock immediately and a second
+    // process could race in.
+    std::mem::forget(file);
+    Ok(())
 }
