@@ -606,40 +606,74 @@ impl ChainEndpoint for PenumbraChain {
         // pure-gRPC operations (every `hermes query …` subcommand, all the
         // IBC client/connection/channel reads) work normally because they
         // never touch view_client.
-        let view_mode: ViewMode = match config.view_service_storage_dir {
-            Some(ref dir_string) => {
-                let p = PathBuf::from(dir_string)
+        // Pre-compute the cache key so we can check the in-process cache
+        // BEFORE attempting the flock. This is critical: the daemon calls
+        // bootstrap() multiple times during its own lifecycle (health_check,
+        // scan.chain, init_subscriptions, wallet task) and the second + later
+        // calls would otherwise fail to re-acquire the lock against
+        // themselves (POSIX flock returns EWOULDBLOCK to the SAME process
+        // that already holds the lock when LOCK_NB is set). If the cache has
+        // a ViewServer for this (view_file, grpc_addr), we know THIS
+        // process is the lock holder and we just hand back the existing
+        // ViewServer — no second flock attempt, no spurious Skipped mode.
+        let candidate_view_file: Option<String> = match config.view_service_storage_dir {
+            Some(ref dir_string) => Some(
+                PathBuf::from(dir_string)
                     .join("relayer-view.sqlite")
                     .to_str()
                     .ok_or_else(|| Error::temp_penumbra_error("Non-UTF8 view path".to_owned()))?
-                    .to_owned();
-                let lock_path = format!("{p}.lock");
-                match acquire_view_db_lock(&lock_path) {
-                    Ok(()) => {
-                        tracing::info!(
-                            view_file = %p,
-                            lock_path = %lock_path,
-                            "acquired exclusive lock on view DB; using file-backed view"
-                        );
-                        ViewMode::File(p)
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            view_file = %p,
-                            lock_path = %lock_path,
-                            error = %e,
-                            "view DB lock held by another process; skipping view-server \
-                             bootstrap. Operations that need the view (build tx, balance, \
-                             health-check) will fail; pure gRPC queries (query packet/client \
-                             state, etc.) still work."
-                        );
-                        ViewMode::Skipped
+                    .to_owned(),
+            ),
+            None => None,
+        };
+        let cache_key = (
+            candidate_view_file.clone().unwrap_or_default(),
+            config.grpc_addr.to_string(),
+        );
+        let cache_hit = view_server_cache()
+            .lock()
+            .expect("view server cache mutex poisoned")
+            .contains_key(&cache_key);
+
+        let view_mode: ViewMode = if cache_hit {
+            // Same process already bootstrapped this (view_file, grpc_addr).
+            // Reuse the cached worker without touching the flock.
+            match candidate_view_file.clone() {
+                Some(p) => ViewMode::File(p),
+                None => ViewMode::InMemory,
+            }
+        } else {
+            match config.view_service_storage_dir {
+                Some(_) => {
+                    let p = candidate_view_file.clone().expect("set in candidate above");
+                    let lock_path = format!("{p}.lock");
+                    match acquire_view_db_lock(&lock_path) {
+                        Ok(()) => {
+                            tracing::info!(
+                                view_file = %p,
+                                lock_path = %lock_path,
+                                "acquired exclusive lock on view DB; using file-backed view"
+                            );
+                            ViewMode::File(p)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                view_file = %p,
+                                lock_path = %lock_path,
+                                error = %e,
+                                "view DB lock held by another process; skipping view-server \
+                                 bootstrap. Operations that need the view (build tx, balance, \
+                                 health-check) will fail; pure gRPC queries (query packet/client \
+                                 state, etc.) still work."
+                            );
+                            ViewMode::Skipped
+                        }
                     }
                 }
-            }
-            None => {
-                tracing::warn!("using in-memory view database for penumbra; consider setting 'view_service_storage_dir'");
-                ViewMode::InMemory
+                None => {
+                    tracing::warn!("using in-memory view database for penumbra; consider setting 'view_service_storage_dir'");
+                    ViewMode::InMemory
+                }
             }
         };
 
