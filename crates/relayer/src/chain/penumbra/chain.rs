@@ -764,24 +764,28 @@ impl ChainEndpoint for PenumbraChain {
         // trusting period in terms of blocks instead of duration.
         let unbonding_period = Duration::from_secs(unbonding_delay * 5);
 
-        // Wait for view sync ONLY when we have a view_client. Skipped-mode
-        // sub-processes return immediately so commands like `hermes query
-        // packet pending` and `hermes query client state` start in O(ms)
-        // instead of blocking on a (now never-completing) status stream.
-        if let Some(view_client) = view_client.as_ref() {
-            tracing::info!("starting view service sync");
-            let mut view_client = view_client.clone();
-            let sync_height = rt
-                .block_on(async {
-                    let mut stream = ViewClient::status_stream(&mut view_client).await?;
-                    let mut sync_height = 0u64;
-                    while let Some(status) = stream.next().await.transpose()? {
-                        sync_height = status.full_sync_height;
-                    }
-                    Ok(sync_height)
-                })
-                .map_err(|e: anyhow::Error| Error::temp_penumbra_error(e.to_string()))?;
-            tracing::info!(?sync_height, "view service sync complete");
+        // Previously bootstrap blocked on `ViewClient::status_stream` until
+        // the view DB caught up to chain tip. After a `hermes-view-resync`
+        // wipe that's 8-10 hours of catch-up during which the supervisor
+        // can't spawn ANY workers (`workers{type="packet"}=0` everywhere,
+        // alerts firing) and even `hermes query` against this chain
+        // wedges. With the flock fix preventing cross-process corruption,
+        // wipes shouldn't happen routinely anymore — but we also don't
+        // want any future operator-initiated wipe (or first-time startup)
+        // to lock the entire daemon out of relaying for 10 hours.
+        //
+        // Skip the wait entirely. The view worker syncs in the background;
+        // operations that need it (`build_penumbra_tx`, `query_balance`,
+        // `health_check`) fail-and-retry until the view is far enough
+        // along. The supervisor + packet workers start immediately so
+        // metrics populate, IBC queries work, and the relayer can pick up
+        // pending packets as soon as the view has the corresponding notes.
+        if view_client.is_some() {
+            tracing::info!(
+                "view-server worker spawned; sync continues in background. \
+                 Penumbra tx-build / balance / health-check will return \
+                 errors that retry until the view catches up to chain tip."
+            );
         } else {
             tracing::info!("skipping view service sync (sub-process, no view bootstrapped)");
         }
