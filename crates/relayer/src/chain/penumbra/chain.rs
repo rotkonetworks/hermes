@@ -1585,9 +1585,17 @@ impl ChainEndpoint for PenumbraChain {
             .collect();
         commitment_sequences.sort_unstable();
 
+        // Penumbra's IBC gRPC reports query heights with revision_number 0,
+        // but the rest of the relayer tracks penumbra-1 at its chain-id
+        // revision (1) for client state, updates and status. Force the
+        // revision number so recv proof heights line up with the client's
+        // consensus-state heights; otherwise client updates fail with
+        // "missing trusted state smaller than target height".
         let height = response
             .height
-            .and_then(|raw_height| raw_height.try_into().ok())
+            .and_then(|raw_height| {
+                ICSHeight::new(self.id().version(), raw_height.revision_height).ok()
+            })
             .ok_or_else(|| Error::grpc_response_param("height".to_string()))?;
 
         Ok((commitment_sequences, height))
@@ -1742,9 +1750,13 @@ impl ChainEndpoint for PenumbraChain {
             .map(|v| v.sequence.into())
             .collect();
 
+        // See query_packet_commitments: normalize the revision number so ack
+        // proof heights match the rev-1 client consensus states.
         let height = response
             .height
-            .and_then(|raw_height| raw_height.try_into().ok())
+            .and_then(|raw_height| {
+                ICSHeight::new(self.id().version(), raw_height.revision_height).ok()
+            })
             .ok_or_else(|| Error::grpc_response_param("height".to_string()))?;
 
         Ok((acks_sequences, height))
