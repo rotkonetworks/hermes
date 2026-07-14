@@ -43,6 +43,10 @@ jobs:
       - uses: taiki-e/create-gh-release-action@v1
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # Our tags carry a `-rotko.N` suffix (a semver pre-release identifier),
+          # which the action would otherwise auto-flag as a pre-release and hide
+          # from the top of the Releases page. Publish them as full releases.
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
