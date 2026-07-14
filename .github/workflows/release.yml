@@ -1,4 +1,19 @@
-# Create GitHub release and upload Hermes binaries.
+# Create a GitHub release and upload cross-platform Hermes binaries.
+#
+# This fork embeds a Penumbra view server, which pulls in native C/C++
+# dependencies (rocksdb via librocksdb-sys, and openssl). Those must be
+# compiled per-platform, so we build on NATIVE runners for each target
+# instead of cross-compiling — cross-compiling rocksdb+openssl is brittle.
+#
+# Platforms produced:
+#   - Linux  x86_64   (ubuntu-latest)
+#   - Linux  aarch64  (ubuntu-24.04-arm — native ARM runner, no cross)
+#   - macOS  x86_64   (macos-13 — native Intel)
+#   - macOS  aarch64  (macos-latest — native Apple Silicon)
+#
+# Windows is NOT built natively: librocksdb-sys + openssl-sys make an
+# MSVC build impractical, and the relayer is a long-running server. Windows
+# users run the Linux x86_64 binary under WSL2 (see the self-hosting guide).
 
 name: Release
 
@@ -6,55 +21,70 @@ on:
   push:
     tags:
       - v[0-9]+.*
+  # Allow cutting a build manually from the Actions tab without tagging.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build/upload (e.g. v1.13.2-rotko.1). Leave blank for a dry build with no upload."
+        required: false
+        default: ""
 
 jobs:
   create-release:
+    # Only create a GitHub release object for real tag pushes (or a manual tag).
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/create-gh-release-action@v1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
         env:
-          # (required)
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   upload-assets:
     needs:
       - create-release
+    # create-release is skipped on dry manual runs; still allow the build to run
+    # so we can validate every platform compiles.
+    if: always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
         config:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu }
-          - { os: macos-latest, target: x86_64-apple-darwin }
-          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: ubuntu-latest,   target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-13,        target: x86_64-apple-darwin }
+          - { os: macos-latest,    target: aarch64-apple-darwin }
     runs-on: ${{ matrix.config.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies (clang/cmake for rocksdb, ssl)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang libclang-dev cmake pkg-config libssl-dev protobuf-compiler
+
+      - name: Install macOS build dependencies (cmake for rocksdb)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake protobuf || true
+
+      # On a real tag/manual-tag run this uploads the archives to the release.
+      # On a dry manual run (no tag) it just compiles + packages as an artifact,
+      # proving the platform builds.
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          # (required)
           bin: hermes
-          # (optional) Target triple
           target: ${{ matrix.config.target }}
-          # (optional) On which platform to distribute the `.tar.gz` file.
-          # [default value: unix]
-          # [possible values: all, unix, windows, none]
           tar: unix
-          # (optional) On which platform to distribute the `.zip` file.
-          # [default value: windows]
-          # [possible values: all, unix, windows, none]
           zip: unix
-          # (optional) Archive name (non-extension portion of filename) to be uploaded.
-          # [default value: $bin-$target]
-          # [possible values: the following variables and any string]
-          #   variables:
-          #     - $bin - Binary name (non-extension portion of filename).
-          #     - $target - Target triple.
-          #     - $tag - Tag of this release.
           archive: $bin-$tag-$target
+          # Skip the actual GitHub-release upload on dry runs.
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag == '' }}
+          checksum: sha256
         env:
-          # (required)
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # (optional)
           CARGO_PROFILE_RELEASE_LTO: true

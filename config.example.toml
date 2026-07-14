@@ -1,0 +1,184 @@
+# ============================================================
+# Hermes IBC Relayer — PUBLIC EXAMPLE CONFIG
+# ============================================================
+# This relays IBC packets for the Penumbra <-> Noble corridor
+# (and optionally Osmosis) using PUBLIC RPC/gRPC endpoints, so
+# anyone can run a relayer without operating full nodes first.
+#
+# Quick start:
+#   1. Install the binary (see the self-hosting guide).
+#   2. Copy this file:   cp config.example.toml ~/.hermes/config.toml
+#   3. Add your signing keys (see the [chains] notes below):
+#        hermes keys add --chain noble-1  --key-file  noble.json
+#        (Penumbra is signed by the spend key in kms_config — see below.)
+#   4. Health check:     hermes health-check
+#   5. Run:              hermes start
+#
+# NOTE ON PUBLIC ENDPOINTS: public RPC nodes are rate-limited and
+# frequently prune `/block_results`, which the "pull" event source
+# needs. They are fine for trying the relayer out; for reliable
+# 24/7 relaying, run your own Penumbra + Noble nodes and point the
+# addresses at localhost. See the guide's "Production" section.
+# ============================================================
+
+[global]
+log_level = "info"
+
+[mode]
+
+[mode.clients]
+enabled = true
+refresh = true
+misbehaviour = false
+
+[mode.connections]
+enabled = false
+
+[mode.channels]
+enabled = false
+
+[mode.packets]
+enabled = true
+clear_interval = 100
+clear_on_start = true
+tx_confirmation = true
+
+[rest]
+enabled = true
+host = "127.0.0.1"
+port = 3000
+
+[telemetry]
+enabled = true
+host = "127.0.0.1"
+port = 3001
+
+# ============================================================
+# PENUMBRA — penumbra-1
+# ============================================================
+# Penumbra is shielded: the relayer runs an EMBEDDED view server
+# that syncs a local view of the chain into `view_service_storage_dir`.
+# First start performs a full view sync (can take a while); progress
+# is persisted, so restarts resume where they left off.
+#
+# `kms_config.spend_key` MUST be your own Penumbra spend key. It is
+# used to sign the relayer's Penumbra transactions and to pay fees,
+# so the associated account needs a small UM balance. NEVER commit a
+# real spend key — the value below is a non-functional placeholder.
+[[chains]]
+id = "penumbra-1"
+type = "Penumbra"
+rpc_addr = "https://penumbra-rpc.polkachu.com"
+grpc_addr = "https://penumbra-grpc.polkachu.com:443"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "15s"
+clock_drift = "5s"
+max_block_time = "10s"
+client_refresh_rate = "1/4"
+kms_config = { spend_key = "penumbraspendkey1REPLACE_WITH_YOUR_OWN_SPEND_KEY000000000000000000000000000" }
+view_service_storage_dir = "~/.hermes/penumbra-view"
+
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+
+# Only relay the Noble transfer channel. Add more ["transfer","channel-N"]
+# entries as you enable more corridors.
+[chains.packet_filter]
+policy = "allow"
+list = [
+  ["transfer", "channel-2"],   # penumbra-1 <-> noble-1
+]
+
+# ============================================================
+# NOBLE — noble-1  (USDC issuer chain)
+# ============================================================
+# Add a funded Noble key before running:
+#   hermes keys add --chain noble-1 --key-file noble.json
+# The account pays gas in uusdc, so keep a little USDC on it.
+[[chains]]
+id = "noble-1"
+type = "CosmosSdk"
+rpc_addr = "https://noble-rpc.polkachu.com"
+grpc_addr = "https://noble-grpc.polkachu.com:443"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "10s"
+trusted_node = false
+account_prefix = "noble"
+key_name = "noble-relayer"
+store_prefix = "ibc"
+default_gas = 400000
+max_gas = 1500000
+gas_multiplier = 1.2
+max_msg_num = 30
+max_tx_size = 180000
+clock_drift = "5s"
+max_block_time = "30s"
+client_refresh_rate = "1/2"
+query_packets_chunk_size = 50
+memo_prefix = "relayed by hermes"
+sequential_batch_tx = false
+
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+
+[chains.gas_price]
+price = 0.1
+denom = "uusdc"
+
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-89"]]   # noble-1 <-> penumbra-1
+
+[chains.address_type]
+derivation = "cosmos"
+
+# ============================================================
+# OSMOSIS — osmosis-1  (OPTIONAL — uncomment to also relay Osmosis)
+# ============================================================
+# Add a funded Osmosis key:  hermes keys add --chain osmosis-1 --key-file osmo.json
+# Update the channel ids to the live penumbra<->osmosis channels before enabling.
+#
+# [[chains]]
+# id = "osmosis-1"
+# type = "CosmosSdk"
+# rpc_addr = "https://osmosis-rpc.polkachu.com"
+# grpc_addr = "https://osmosis-grpc.polkachu.com:443"
+# event_source = { mode = "pull", interval = "1s" }
+# rpc_timeout = "10s"
+# trusted_node = false
+# account_prefix = "osmo"
+# key_name = "osmosis-relayer"
+# store_prefix = "ibc"
+# default_gas = 800000
+# max_gas = 20000000
+# gas_multiplier = 1.4
+# max_msg_num = 30
+# max_tx_size = 180000
+# clock_drift = "5s"
+# max_block_time = "30s"
+# client_refresh_rate = "1/2"
+# query_packets_chunk_size = 50
+# memo_prefix = "relayed by hermes"
+# sequential_batch_tx = false
+#
+# [chains.trust_threshold]
+# numerator = "1"
+# denominator = "3"
+#
+# [chains.gas_price]
+# price = 0.0025
+# denom = "uosmo"
+#
+# [chains.dynamic_gas_price]
+# enabled = true
+# multiplier = 1.1
+# max = 0.6
+#
+# [chains.packet_filter]
+# policy = "allow"
+# list = [["transfer", "channel-17"]]   # penumbra-1 <-> osmosis-1
+#
+# [chains.address_type]
+# derivation = "cosmos"
