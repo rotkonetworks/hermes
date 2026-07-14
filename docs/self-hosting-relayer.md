@@ -33,7 +33,7 @@ robustness/altruism unless a channel has incentivization.
 | **Linux x86_64** | ✅ Native binary | Download the release, or build from source |
 | **Linux aarch64** (ARM64) | ✅ Native binary | Download the release |
 | **macOS Apple Silicon** (M1–M4) | ✅ Native binary | Download the release |
-| **macOS Intel** | ✅ Native binary | Download the release |
+| **macOS Intel** | 🔧 Build from source | No prebuilt binary — Intel-Mac runners are scarce; `cargo build --release` |
 | **Windows** | ⚠️ via **WSL2** | Run the Linux x86_64 binary inside WSL2 |
 
 ### Why no native Windows build?
@@ -58,7 +58,7 @@ Grab the archive for your platform from the
 | Linux, Intel/AMD | `hermes-<tag>-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux, ARM64 | `hermes-<tag>-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS, Apple Silicon | `hermes-<tag>-aarch64-apple-darwin.tar.gz` |
-| macOS, Intel | `hermes-<tag>-x86_64-apple-darwin.tar.gz` |
+| macOS, Intel | *(build from source — see Option B)* |
 
 ```bash
 # example (Linux x86_64)
