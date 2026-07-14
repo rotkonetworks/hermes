@@ -159,6 +159,12 @@ pub struct PenumbraChain {
     view_client: Option<Mutex<ViewServiceClient<BoxGrpcService>>>,
     custody_client: CustodyServiceClient<BoxGrpcService>,
 
+    /// Pauses the view-server sync worker during tx build to prevent the
+    /// note-forgetting race (see `build_penumbra_tx`). Shared with the
+    /// ViewServer's worker via `Arc`; a throwaway lock in Skipped mode
+    /// (view_client is None, so the field is never exercised).
+    tx_build_lock: Arc<tokio::sync::RwLock<()>>,
+
     ibc_client_grpc_client: IbcClientQueryClient<tonic::transport::Channel>,
     ibc_connection_grpc_client: IbcConnectionQueryClient<tonic::transport::Channel>,
     ibc_channel_grpc_client: IbcChannelQueryClient<tonic::transport::Channel>,
@@ -383,15 +389,30 @@ impl PenumbraChain {
             planner.ibc_action(ibc_action);
         }
 
+        // Pause the view sync worker for the entire plan+witness+build cycle.
+        // The planner selects spendable notes from the SQL DB; build_transaction
+        // then witnesses them against the in-memory SCT. If the sync worker
+        // processes a block in between, it can forget() a note the planner just
+        // picked, causing "Note commitment missing" and an unbounded re-scan
+        // that balloons memory to tens of GB. The worker takes the read side of
+        // this lock per block, so holding the write side blocks it until we're
+        // done building.
+        let tx_build_lock = self.tx_build_lock.clone();
+        let _sync_pause = tx_build_lock.write().await;
+
         let plan = planner.plan(&mut view_client, AddressIndex::new(0)).await?;
 
-        penumbra_wallet::build_transaction(
+        let tx = penumbra_wallet::build_transaction(
             self.config.kms_config.spend_key.full_viewing_key(),
             &mut view_client,
             &mut self.custody_client,
             plan,
         )
-        .await
+        .await;
+
+        // Allow sync to resume before the (potentially slow) submit.
+        drop(_sync_pause);
+        tx
     }
 
     async fn send_messages_in_penumbratx(
@@ -684,6 +705,9 @@ impl ChainEndpoint for PenumbraChain {
         // when the config explicitly asks for in-memory). For Skipped mode
         // we leave it as None — bootstrap finishes cheaply, no worker
         // spawned, no DB ever touched.
+        // Populated with the ViewServer's sync-pause lock when a view is
+        // bootstrapped; stays None in Skipped mode (see struct field).
+        let mut tx_build_lock: Option<Arc<tokio::sync::RwLock<()>>> = None;
         let view_client: Option<ViewServiceClient<BoxGrpcService>> = match &view_mode {
             ViewMode::Skipped => None,
             ViewMode::File(_) | ViewMode::InMemory => {
@@ -724,6 +748,11 @@ impl ChainEndpoint for PenumbraChain {
                         svc
                     }
                 };
+
+                // Extract the sync-pause lock (shared Arc) from the ViewServer
+                // before it's wrapped in the gRPC server. build_penumbra_tx
+                // holds its write side to pause the sync worker during tx build.
+                tx_build_lock = Some(svc.tx_build_lock());
 
                 let svc = ViewServiceServer::new(svc);
                 Some(ViewServiceClient::new(box_grpc_svc::local(svc)))
@@ -809,6 +838,8 @@ impl ChainEndpoint for PenumbraChain {
             rt,
             view_client: view_client.map(Mutex::new),
             custody_client,
+            tx_build_lock: tx_build_lock
+                .unwrap_or_else(|| Arc::new(tokio::sync::RwLock::new(()))),
             tendermint_rpc_client: rpc_client,
             tendermint_light_client,
             tx_monitor_cmd: None,
