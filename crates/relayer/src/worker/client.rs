@@ -2,13 +2,13 @@ use core::{convert::Infallible, time::Duration};
 
 use crossbeam_channel::Receiver;
 use ibc_relayer_types::{core::ics02_client::events::UpdateClient, events::IbcEvent};
-use retry::{delay::Fibonacci, retry_with_index};
+use retry::{delay::Fibonacci, retry_with_index, OperationResult};
 use tracing::{debug, debug_span, error_span, trace, warn};
 
 use super::WorkerCmd;
 use crate::{
     chain::handle::ChainHandle,
-    foreign_client::{ForeignClient, MisbehaviourResults},
+    foreign_client::{ForeignClient, HasExpiredOrFrozenError, MisbehaviourResults},
     util::{
         retry::clamp_total,
         task::{spawn_background_task, Next, TaskError, TaskHandle},
@@ -43,14 +43,28 @@ pub fn spawn_refresh_client<ChainA: ChainHandle, ChainB: ChainHandle>(
         move || {
             // Try to refresh the client, but only if the refresh window has expired.
             // If the refresh fails, retry according to the given strategy.
-            let res = retry_with_index(refresh_strategy(), |_| client.refresh());
+            // Short-circuit on an expired or frozen client instead of
+            // retrying: `refresh()` -> `validated_client_state` issues three
+            // dst-chain queries per attempt, and a client that is expired or
+            // frozen cannot be recovered by retrying — only by governance
+            // (`MsgRecoverClient`). Retrying burns ~24 attempts per spawn,
+            // each opening fresh gRPC connections and formatting a fresh
+            // error, for no possible benefit. Terminating the worker stops
+            // that churn; the supervisor re-spawns it on the next scan once
+            // the client is recovered.
+            let res = retry_with_index(refresh_strategy(), |_| match client.refresh() {
+                Ok(events) => OperationResult::Ok(events),
+                Err(e) if e.is_expired_or_frozen_error() => OperationResult::Err(e),
+                Err(e) => OperationResult::Retry(e),
+            });
 
             match res {
                 // If `client.refresh()` was successful, continue
                 Ok(_) => Ok(Next::Continue),
 
                 // If `client.refresh()` failed and the retry mechanism
-                // exceeded the maximum delay, return a fatal error.
+                // exceeded the maximum delay, or we short-circuited on an
+                // expired/frozen client, return a fatal error.
                 Err(e) => Err(TaskError::Fatal(e)),
             }
         },
