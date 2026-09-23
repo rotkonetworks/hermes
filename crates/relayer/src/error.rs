@@ -757,6 +757,53 @@ fn parse_sequences_in_mismatch_error_message(message: &str) -> Option<(u64, u64)
 mod tests {
     use super::*;
 
+    /// `variant_name` must not vary with the error's payload.
+    ///
+    /// This is the property that keeps telemetry label cardinality bounded:
+    /// `Display` embeds gas-used values, sequence numbers and chain responses,
+    /// so using it as a metric label mints a fresh time-series per retry.
+    #[test]
+    fn variant_name_is_invariant_under_payload() {
+        let mut names = std::collections::HashSet::new();
+
+        for i in 0..1000 {
+            // Same variant, payload that differs every iteration — exactly the
+            // shape of a simulate failure retrying against a broken client,
+            // where the response embeds `with gas used: 'NNNNNN'`.
+            let e = Error::grpc_response_param(format!(
+                "insufficient fees; got: 0 required: {i}uatom: with gas used: '{}'",
+                100_000 + i
+            ));
+
+            assert_ne!(
+                e.detail().to_string(),
+                Error::grpc_response_param(String::new()).detail().to_string(),
+                "Display must embed the payload, else this test proves nothing",
+            );
+
+            names.insert(e.detail().variant_name());
+        }
+
+        assert_eq!(
+            names.len(),
+            1,
+            "1000 distinct payloads collapsed to {} labels, expected 1: {names:?}",
+            names.len(),
+        );
+    }
+
+    /// Distinct variants must stay distinguishable — a fix that mapped
+    /// everything to a single constant would pass the test above.
+    #[test]
+    fn variant_name_distinguishes_variants() {
+        let param = Error::grpc_response_param("x".to_string());
+        let other = Error::other_with_string("x".to_string());
+
+        assert_eq!(param.detail().variant_name(), "GrpcResponseParam");
+        assert_eq!(other.detail().variant_name(), "OtherWithString");
+        assert_ne!(param.detail().variant_name(), other.detail().variant_name());
+    }
+
     #[test]
     fn test_parse_sequences_in_mismatch_error_message() {
         struct Test<'a> {
@@ -820,6 +867,132 @@ mod tests {
                 "{}",
                 test.name
             )
+        }
+    }
+}
+
+impl ErrorDetail {
+    /// Stable, bounded identifier for this error variant.
+    ///
+    /// Telemetry uses error descriptions as metric labels, and the
+    /// OpenTelemetry SDK retains one time-series per distinct label tuple for
+    /// the lifetime of the meter. `Display` output embeds variable data (gas
+    /// used, sequence numbers, hashes, chain responses), so using it as a
+    /// label makes cardinality unbounded — every retry mints a new
+    /// time-series. This returns one of a fixed set of 108 static
+    /// strings instead.
+    pub fn variant_name(&self) -> &'static str {
+        use ErrorDetail::*;
+
+        match self {
+            OtherWithString(_) => "OtherWithString",
+            Io(_) => "Io",
+            Rpc(_) => "Rpc",
+            AbciQuery(_) => "AbciQuery",
+            Config(_) => "Config",
+            CheckTx(_) => "CheckTx",
+            DeliverTx(_) => "DeliverTx",
+            SendTx(_) => "SendTx",
+            WebSocket(_) => "WebSocket",
+            EventSource(_) => "EventSource",
+            Grpc(_) => "Grpc",
+            GrpcStatus(_) => "GrpcStatus",
+            GrpcTransport(_) => "GrpcTransport",
+            GrpcResponseParam(_) => "GrpcResponseParam",
+            Decode(_) => "Decode",
+            LightClientBuilder(_) => "LightClientBuilder",
+            LightClientVerification(_) => "LightClientVerification",
+            LightClientState(_) => "LightClientState",
+            LightClientIo(_) => "LightClientIo",
+            ChainNotCaughtUp(_) => "ChainNotCaughtUp",
+            PrivateStore(_) => "PrivateStore",
+            Event(_) => "Event",
+            ConversionFromAny(_) => "ConversionFromAny",
+            EmptyUpgradedClientState(_) => "EmptyUpgradedClientState",
+            ConsensusStateTypeMismatch(_) => "ConsensusStateTypeMismatch",
+            EmptyResponseValue(_) => "EmptyResponseValue",
+            EmptyResponseProof(_) => "EmptyResponseProof",
+            RpcResponse(_) => "RpcResponse",
+            MalformedProof(_) => "MalformedProof",
+            InvalidHeight(_) => "InvalidHeight",
+            InvalidHeightNoSource(_) => "InvalidHeightNoSource",
+            InvalidMetadata(_) => "InvalidMetadata",
+            BuildClientStateFailure(_) => "BuildClientStateFailure",
+            CreateClient(_) => "CreateClient",
+            ClientStateType(_) => "ClientStateType",
+            ConnectionNotFound(_) => "ConnectionNotFound",
+            BadConnectionState(_) => "BadConnectionState",
+            ConnOpen(_) => "ConnOpen",
+            ConnOpenInit(_) => "ConnOpenInit",
+            ConnOpenTry(_) => "ConnOpenTry",
+            ChanOpenAck(_) => "ChanOpenAck",
+            ChanOpenConfirm(_) => "ChanOpenConfirm",
+            ConsensusProof(_) => "ConsensusProof",
+            Packet(_) => "Packet",
+            RecvPacket(_) => "RecvPacket",
+            AckPacket(_) => "AckPacket",
+            TimeoutPacket(_) => "TimeoutPacket",
+            MessageTransaction(_) => "MessageTransaction",
+            Query(_) => "Query",
+            KeyBase(_) => "KeyBase",
+            KeyNotFound(_) => "KeyNotFound",
+            Ics02(_) => "Ics02",
+            Ics03(_) => "Ics03",
+            Ics07(_) => "Ics07",
+            Ics23(_) => "Ics23",
+            Ics29(_) => "Ics29",
+            Ics31(_) => "Ics31",
+            InvalidUri(_) => "InvalidUri",
+            ChainIdentifier(_) => "ChainIdentifier",
+            NonProvableData(_) => "NonProvableData",
+            ChannelSend(_) => "ChannelSend",
+            ChannelReceive(_) => "ChannelReceive",
+            ChannelReceiveTimeout(_) => "ChannelReceiveTimeout",
+            InvalidInputHeader(_) => "InvalidInputHeader",
+            TxNoConfirmation(_) => "TxNoConfirmation",
+            Misbehaviour(_) => "Misbehaviour",
+            InvalidKeyAddress(_) => "InvalidKeyAddress",
+            Bech32Encoding(_) => "Bech32Encoding",
+            ClientTypeMismatch(_) => "ClientTypeMismatch",
+            ProtobufDecode(_) => "ProtobufDecode",
+            ProtobufEncode(_) => "ProtobufEncode",
+            TxSimulateGasEstimateExceeded(_) => "TxSimulateGasEstimateExceeded",
+            HealthCheckJsonRpc(_) => "HealthCheckJsonRpc",
+            FetchVersionParsing(_) => "FetchVersionParsing",
+            FetchVersionGrpcTransport(_) => "FetchVersionGrpcTransport",
+            FetchVersionGrpcStatus(_) => "FetchVersionGrpcStatus",
+            FetchVersionInvalidVersionResponse(_) => "FetchVersionInvalidVersionResponse",
+            ConfigValidationJsonRpc(_) => "ConfigValidationJsonRpc",
+            ConfigValidationTxSizeOutOfBounds(_) => "ConfigValidationTxSizeOutOfBounds",
+            ConfigValidationMaxGasTooHigh(_) => "ConfigValidationMaxGasTooHigh",
+            ConfigValidationTrustingPeriodSmallerThanZero(_) => "ConfigValidationTrustingPeriodSmallerThanZero",
+            ConfigValidationTrustingPeriodGreaterThanUnbondingPeriod(_) => "ConfigValidationTrustingPeriodGreaterThanUnbondingPeriod",
+            ConfigValidationDefaultGasTooHigh(_) => "ConfigValidationDefaultGasTooHigh",
+            ConfigValidationGasMultiplierLow(_) => "ConfigValidationGasMultiplierLow",
+            CompatCheckFailed(_) => "CompatCheckFailed",
+            UnknownAccountType(_) => "UnknownAccountType",
+            EmptyBaseAccount(_) => "EmptyBaseAccount",
+            EmptyQueryAccount(_) => "EmptyQueryAccount",
+            NoHistoricalEntries(_) => "NoHistoricalEntries",
+            InvalidHistoricalEntries(_) => "InvalidHistoricalEntries",
+            GasPriceTooLow(_) => "GasPriceTooLow",
+            TxIndexingDisabled(_) => "TxIndexingDisabled",
+            EmptyDenomTrace(_) => "EmptyDenomTrace",
+            MessageTooBigForTx(_) => "MessageTooBigForTx",
+            InvalidKeyType(_) => "InvalidKeyType",
+            QueriedProofNotFound(_) => "QueriedProofNotFound",
+            InvalidArchiveAddress(_) => "InvalidArchiveAddress",
+            InvalidCompatMode(_) => "InvalidCompatMode",
+            HttpRequest(_) => "HttpRequest",
+            HttpResponse(_) => "HttpResponse",
+            HttpResponseBody(_) => "HttpResponseBody",
+            JsonDeserialize(_) => "JsonDeserialize",
+            JsonField(_) => "JsonField",
+            ParseFloat(_) => "ParseFloat",
+            ParseInt(_) => "ParseInt",
+            Base64Decode(_) => "Base64Decode",
+            TempPenumbraError(_) => "TempPenumbraError",
+            Other(_) => "Other",
         }
     }
 }
