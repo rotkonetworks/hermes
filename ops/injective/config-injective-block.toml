@@ -1,0 +1,138 @@
+# injective-1 <-> penumbra-1 hermes chain block (PASTE-READY)
+# ---------------------------------------------------------------------------
+# Append this [[chains]] block to the production ~/.hermes/config.toml on the
+# relayer host, then add channel-18 to the penumbra-1 packet_filter (see the
+# NOTE at the bottom). This wires the receive-and-shield USDC.inj ramp that
+# replaces the sunsetting Noble path.
+#
+# Live path this relays:
+#   Penumbra penumbra-1 channel-18  <->  Injective injective-1 channel-494
+#   client on injective side: 07-tendermint-353 (100h trusting period)
+#
+# Injective is Ethermint, NOT a vanilla cosmos chain:
+#   - account_prefix 'inj', eth_secp256k1 keys, coin type 60
+#   - address_type derivation = 'ethermint' with the INJECTIVE pk_type
+#     (/injective.crypto.v1beta1.ethsecp256k1.PubKey - note it differs from the
+#      generic /ethermint.crypto.v1.ethsecp256k1.PubKey in config.example.toml)
+#   - gas is INJ (18 decimals), NOT a 6-decimal cosmos token
+# This matches the wallet-side signer in
+# packages/wallet/src/networks/injective (proven on mainnet, round-trip tx
+# 5699D4FC..., code 0, height 183397211).
+# ---------------------------------------------------------------------------
+
+[[chains]]
+id = 'injective-1'
+type = 'CosmosSdk'
+ccv_consumer_chain = false
+
+# Point these at a node you trust. The endpoints below were probed 2026-09-18
+# and returned network="injective-1" (RPC) - fine to bootstrap, but a relayer
+# should ideally run/point to its own full node (public endpoints rate-limit and
+# can miss events). Alternate RPC: https://sentry.tm.injective.network:443.
+# NOTE: probe the gRPC endpoint before `hermes start` - a wrong/unreachable
+# grpc_addr makes hermes fail to start, and while it is down the client ages:
+#   grpcurl injective-grpc.publicnode.com:443 list   # or: grpcurl -plaintext ...
+rpc_addr = 'https://injective-rpc.publicnode.com:443'
+grpc_addr = 'https://injective-grpc.publicnode.com:443'
+event_source = { mode = 'push', url = 'wss://injective-rpc.publicnode.com:443/websocket', batch_delay = '500ms' }
+rpc_timeout = '15s'
+trusted_node = false
+
+account_prefix = 'inj'
+key_name = 'injective-relayer'
+store_prefix = 'ibc'
+
+# Ethermint address derivation + the INJECTIVE ethsecp256k1 pk_type.
+address_type = { derivation = 'ethermint', proto_type = { pk_type = '/injective.crypto.v1beta1.ethsecp256k1.PubKey' } }
+
+# Gas is INJ (18 decimals). 500000000 inj = 5e-10 INJ/gas, comfortably above
+# the chain minimum. Injective also supports EIP-1559; if you want dynamic
+# pricing, set `dynamic_gas_price` (see config.example.toml) instead of / on top
+# of the static price. default_gas/max_gas sized for a single MsgRecvPacket +
+# client update.
+gas_price = { price = 500000000, denom = 'inj' }
+gas_multiplier = 1.2
+default_gas = 400000
+max_gas = 8000000
+max_msg_num = 15
+max_tx_size = 1800000
+
+# Injective unbonding is 21 days; let hermes derive the trusting period as 2/3
+# of that from chain params, or pin it explicitly if you prefer:
+# trusting_period = '14days'
+clock_drift = '15s'
+max_block_time = '30s'
+
+# Only relay the penumbra ramp channel - do NOT relay all of injective's ~500
+# channels. channel-494 is the injective end of penumbra-1 channel-18.
+[chains.packet_filter]
+policy = 'allow'
+list = [
+  ['transfer', 'channel-494'],   # injective-1 <-> penumbra-1
+]
+
+# ---------------------------------------------------------------------------
+# NOTE - penumbra-1 side: add channel-18 to the EXISTING penumbra-1
+# [chains.packet_filter] allow-list in config.toml (do not create a second
+# filter). It should end up looking like:
+#
+#   [chains.packet_filter]
+#   policy = 'allow'
+#   list = [
+#     ['transfer', 'channel-4'],    # penumbra-1 <-> noble-1
+#     ['transfer', 'channel-17'],   # penumbra-1 <-> osmosis-1  (if kept)
+#     ['transfer', 'channel-18'],   # penumbra-1 <-> injective-1   <-- ADD
+#   ]
+# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# CLIENT HEALTH: client 07-tendermint-353 (100h / 360000s trusting period) IS
+# being updated - as of 2026-09-18 15:17 UTC it was refreshed minutes prior, so
+# it is NOT about to expire (expiry rolls to ~2026-09-22 19:17 UTC and moves
+# forward on each update). HOWEVER, relaying is SPORADIC not steady: the update
+# history shows a ~25h gap (2026-09-17 11:28 -> 2026-09-18 12:28), i.e. no
+# dedicated `hermes start` is holding it. Goal of this block: put injective-1 in
+# BOTH our relayers so hermes refreshes the client continuously (refresh = true)
+# and relays packets, instead of relying on sporadic/third-party updates. If it
+# ever does lapse, recovery is the governance client-recovery in
+# ibc-relay/ibc-client-recovery-runbook.md, not a config paste.
+# ===========================================================================
+#
+# Also confirm the production config's [mode.clients] has `refresh = true`.
+# Without it hermes only updates a client when packets flow, and this channel is
+# idle - so an idle-but-configured injective could still expire. With refresh on,
+# hermes keeps the client fresh on its own once injective-1 is in the config.
+#
+# DEPLOY (from ibc-relay/CLAUDE.md conventions - build on the server, never scp
+# a locally-built binary; the relayer host has older glibc). Do this on BOTH
+# relayer hosts (penumbra-01/ct1101 bkk06 and penumbra-02):
+#
+#   1. Import the relayer's inj key (eth_secp256k1), coin type 60:
+#        hermes keys add --chain injective-1 --mnemonic-file <file> \
+#          --hd-path "m/44'/60'/0'/0/0"
+#   2. Read back the inj1 address hermes will sign gas from:
+#        hermes keys list --chain injective-1
+#   3. Fund THAT inj1 address with INJ for gas. The throwaway from the #34
+#      round-trip still holds ~0.098 INJ - sweep it in with (from packages/wallet):
+#        INJ_DEST=<inj1 from step 2> \
+#          KEYFILE=/tmp/inj-mainnet-roundtrip-mnemonic.txt \
+#          pnpm tsx scripts/inj-sweep.mts
+#      (financial action - the user runs it.) Top up further from an exchange if
+#      0.098 INJ is thin for sustained relaying.
+#   4. Do NOT open new channels - channel-18/494 already exist (verified OPEN
+#      2026-09-18) and only need relaying.
+#   5. systemctl restart hermes   (config.toml now has injective-1)
+#   6. Confirm it is actually relaying + the client stops aging:
+#        hermes query packet pending --chain penumbra-1 --port transfer --channel channel-18
+#        hermes query client status  --chain injective-1 --client 07-tendermint-353
+#
+# STOPGAP if a full `hermes start` slips before the Sep 21 deadline - each run
+# buys another ~100h. The injective-side update needs the inj key + gas (steps
+# 1-3); the penumbra-side update runs today on the already-funded penumbra key:
+#   hermes update client --host-chain injective-1 --client 07-tendermint-353
+#   hermes update client --host-chain penumbra-1  --client <penumbra client for channel-18's connection>
+#   # find the penumbra-side client:
+#   hermes query channel client --chain penumbra-1 --port transfer --channel channel-18
+#
+# Only after `hermes start` is steadily relaying injective should the wallet
+# flip apps/extension/src/config/networks.ts injective launched:true.
