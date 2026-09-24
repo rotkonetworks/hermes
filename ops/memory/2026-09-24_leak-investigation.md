@@ -51,7 +51,9 @@ different lineage and their central file reference does not exist on master.
    deleted the view sqlite and `exit(1)`'d, and the restart resynced from
    genesis through an `mpsc::channel(1000)` of compact blocks decoded at up
    to 12 MiB each (`worker.rs:220,41,204`) — count-bounded, not
-   byte-bounded. `599e46905` removes the trigger.
+   byte-bounded. `599e46905` removes the plan/witness RACE that produced
+   `Note commitment missing`; it does NOT remove the wipe-and-resync path,
+   which is still live for any other cause of that error. See below.
 
 ## Not the leak
 
@@ -66,6 +68,12 @@ once, not per proof. Concurrent proving is bounded to 1 per process
 
 ## Latent bugs found, not fixed
 
+- The wipe-and-resync path is still armed.
+  `trigger_view_db_recovery_if_corrupted` (`chain/penumbra/chain.rs:2091-2143`)
+  still matches `"Note commitment missing"` at `:2114`, deletes
+  `relayer-view.sqlite` and `exit(1)`s at `:2131-2142`. `599e46905` closed
+  the known race that caused it, but any other source of that error still
+  triggers a full from-genesis resync. Standing footgun, not a closed one.
 - `view_server_cache()` (`chain/penumbra/chain.rs:114-117`) is never
   evicted. The cached `ViewServer` clone keeps `sync_height_rx` alive and
   the sync worker only exits when all receivers drop
@@ -94,8 +102,10 @@ Two fixes, neither of which is claimed to be "the" leak fix:
 
 ## Open: channel pooling
 
-Worth doing for latency, CPU and fd churn, not for RSS. Design at
-`scratchpad/design-grpc-channel-pool.md`. Recommendation is a per-endpoint
+Worth doing for latency, CPU and fd churn, not for RSS. The full design
+document and the measurement harness that produced the ~28 kB/conn figure
+were written to a session scratchpad and did NOT survive; what is recorded
+here is their substance, not their scripts. Recommendation was a per-endpoint
 field on `CosmosSdkChain` (as Astria and Penumbra already do), NOT a global
 URI-keyed pool: a tonic `Channel` is a `tower::Buffer` whose worker is
 `tokio::spawn`ed at creation, so a pool seeded from a throwaway runtime is
