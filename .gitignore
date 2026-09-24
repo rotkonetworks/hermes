@@ -30,3 +30,6 @@ mc.log
 
 # Ignore tooling Cargo.lock
 tools/check-guide/Cargo.lock
+
+# Claude Code session data (holds git worktrees — never commit)
+.claude/
