@@ -1,0 +1,16 @@
+[Unit]
+Description=penumbra-1 pre-restart light-client archive shim (heights 12598600/12598601)
+Documentation=file:///usr/local/bin/penumbra-archive-shim.py
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/penumbra-archive-shim.py
+Environment=ARCHIVE_DATA_DIR=/root/prerestart-light
+Environment=ARCHIVE_BIND=127.0.0.1
+Environment=ARCHIVE_PORT=26670
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

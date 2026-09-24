@@ -1,0 +1,92 @@
+# Test-only hermes config: exercises the penumbra-1 restart-boundary client
+# update path against the rehearsal chain penumbra-restart-drill-1, which
+# crossed the identical 12598600 -> 12598602 boundary.
+#
+# The `penumbra-1` entry deliberately points at the DRILL chain's endpoints so
+# that hermes assembles a header for client 07-tendermint-109 (which really
+# does hold the 12598600 consensus state on Noble) out of drill-chain blocks.
+# Noble must ultimately reject it (different chain id, rekeyed drill validator)
+# -- that rejection happens at simulate, so nothing is ever broadcast.
+[global]
+log_level = "debug"
+
+[mode]
+[mode.clients]
+enabled = false
+refresh = false
+misbehaviour = false
+[mode.connections]
+enabled = false
+[mode.channels]
+enabled = false
+[mode.packets]
+enabled = false
+
+[rest]
+enabled = false
+host = "127.0.0.1"
+port = 3010
+
+[telemetry]
+enabled = false
+host = "127.0.0.1"
+port = 3011
+
+[[chains]]
+id = "penumbra-1"
+type = "Penumbra"
+query_packets_chunk_size = 1
+rpc_addr = "http://127.0.0.1:26957"
+grpc_addr = "http://127.0.0.1:18081"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "15s"
+clock_drift = "5s"
+max_block_time = "10s"
+client_refresh_rate = "1/4"
+kms_config = { spend_key = "penumbraspendkey14a8902qglnlzcusg78qrx58srem87zcxlhdre6qug3z3pxk42jhqlqfxdu" }
+view_service_storage_dir = "/root/hermes-drilltest/view"
+
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-2"]]
+
+[[chains]]
+id = "noble-1"
+type = "CosmosSdk"
+rpc_addr = "https://noble-rpc.polkachu.com"
+grpc_addr = "http://noble-grpc.polkachu.com:21590"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "10s"
+trusted_node = false
+account_prefix = "noble"
+key_name = "noble-testonly"
+store_prefix = "ibc"
+default_gas = 400000
+max_gas = 1500000
+gas_multiplier = 1.2
+max_msg_num = 30
+max_tx_size = 180000
+clock_drift = "5s"
+max_block_time = "30s"
+client_refresh_rate = "1/2"
+memo_prefix = "rotko.net"
+sequential_batch_tx = false
+
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+
+[chains.gas_price]
+price = 0.1
+denom = "uusdc"
+
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-89"]]
+
+[chains.address_type]
+derivation = "cosmos"

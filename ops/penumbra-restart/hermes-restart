@@ -1,0 +1,74 @@
+#!/bin/bash
+# hermes-restart — hermes wrapper that transparently handles the penumbra-1
+# genesis-restart boundary for the Noble client 07-tendermint-109.
+#
+# penumbra-1 halted at 12,598,600 and restarted with a checkpoint genesis at
+# initial_height 12,598,602. Height 12,598,601 is application-only: no CometBFT
+# block, no commit, and migrated nodes serve nothing <= 12,598,600 either. So
+# the FIRST client update across the boundary cannot fetch its trusted (and
+# trusted+1) light blocks from the live node.
+#
+# For that first update only, we point hermes at the local archive shim
+# (penumbra-archive-shim.service), which replays the saved pre-restart
+# commit/validators. Once Noble's client has a post-restart consensus state,
+# stock hermes works unaided and this wrapper stops adding the flags — so it is
+# safe to leave installed permanently, no later edit needed.
+#
+# Everything except `update client` for 07-tendermint-109 is passed straight
+# through to the real binary.
+set -uo pipefail
+
+HERMES_BIN="${HERMES_BIN:-/root/.cargo/bin/hermes}"
+SHIM_ADDR="${SHIM_ADDR:-http://127.0.0.1:26670}"
+RESTART_LAST=12598600            # last pre-restart CometBFT height
+SYNTHETIC=12598601               # app-only block; routes <= this to the shim
+LOCAL_RPC="${LOCAL_RPC:-http://127.0.0.1:26657}"
+NOBLE_API="${NOBLE_API:-https://noble-api.polkachu.com}"
+CLIENT_109=07-tendermint-109
+
+is_109_update() {
+    [ "${1:-}" = "update" ] && [ "${2:-}" = "client" ] || return 1
+    printf '%s\n' "$@" | grep -qx "$CLIENT_109"
+}
+
+if ! is_109_update "$@"; then
+    exec "$HERMES_BIN" "$@"
+fi
+
+# Where is Noble's client now? Only height 12598600 needs the boundary path.
+latest=$(curl -s -m 15 "$NOBLE_API/ibc/core/client/v1/client_states/$CLIENT_109" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin)["client_state"]["latest_height"]["revision_height"])' 2>/dev/null)
+
+# Note the polarity: an *unknown* latest_height takes the boundary path, not the
+# stock one. Adding the flags when they are not needed is harmless (Noble simply
+# records another consensus state from a still-trusted 12598600); omitting them
+# when they are needed is the failure that loses the channel.
+if [ -n "${latest:-}" ] && [ "$latest" != "$RESTART_LAST" ]; then
+    echo "hermes-restart: client $CLIENT_109 latest_height=$latest is past the boundary, using stock update path" >&2
+    exec "$HERMES_BIN" "$@"
+fi
+
+tip=$(curl -s -m 10 "$LOCAL_RPC/status" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["sync_info"]["latest_block_height"])' 2>/dev/null)
+if [ -z "${tip:-}" ] || [ "$tip" -le $((SYNTHETIC + 1)) ]; then
+    echo "hermes-restart: local penumbra-1 tip=${tip:-unknown}, no post-restart block to target yet" >&2
+    exit 1
+fi
+
+# Target a couple of blocks below the tip so the node has certainly committed it.
+target=$((tip - 2))
+[ "$target" -lt 12598602 ] && target=12598602
+
+if ! curl -s -m 5 -X POST -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"commit\",\"params\":{\"height\":\"$SYNTHETIC\"}}" \
+        "$SHIM_ADDR/" | grep -q '"result"'; then
+    echo "hermes-restart: archive shim at $SHIM_ADDR is not answering — start penumbra-archive-shim.service" >&2
+    exit 1
+fi
+
+echo "hermes-restart: crossing the restart boundary: trusted=$RESTART_LAST target=$target via $SHIM_ADDR" >&2
+exec "$HERMES_BIN" "$@" \
+    --trusted-height "$RESTART_LAST" \
+    --height "$target" \
+    --archive-address "$SHIM_ADDR" \
+    --restart-height "$SYNTHETIC"
