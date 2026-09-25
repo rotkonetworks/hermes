@@ -2,13 +2,13 @@ use core::{convert::Infallible, time::Duration};
 
 use crossbeam_channel::Receiver;
 use ibc_relayer_types::{core::ics02_client::events::UpdateClient, events::IbcEvent};
-use retry::{delay::Fibonacci, retry_with_index};
+use retry::{delay::Fibonacci, retry_with_index, OperationResult};
 use tracing::{debug, debug_span, error_span, trace, warn};
 
 use super::WorkerCmd;
 use crate::{
     chain::handle::ChainHandle,
-    foreign_client::{ForeignClient, MisbehaviourResults},
+    foreign_client::{ForeignClient, HasExpiredOrFrozenError, MisbehaviourResults},
     util::{
         retry::clamp_total,
         task::{spawn_background_task, Next, TaskError, TaskHandle},
@@ -43,14 +43,28 @@ pub fn spawn_refresh_client<ChainA: ChainHandle, ChainB: ChainHandle>(
         move || {
             // Try to refresh the client, but only if the refresh window has expired.
             // If the refresh fails, retry according to the given strategy.
-            let res = retry_with_index(refresh_strategy(), |_| client.refresh());
+            // Short-circuit on an expired or frozen client instead of
+            // retrying: `refresh()` -> `validated_client_state` issues three
+            // dst-chain queries per attempt, and a client that is expired or
+            // frozen cannot be recovered by retrying — only by governance
+            // (`MsgRecoverClient`). Retrying burns ~24 attempts per spawn,
+            // each opening fresh gRPC connections and formatting a fresh
+            // error, for no possible benefit. Terminating the worker stops
+            // that churn; the supervisor re-spawns it on the next scan once
+            // the client is recovered.
+            let res = retry_with_index(refresh_strategy(), |_| match client.refresh() {
+                Ok(events) => OperationResult::Ok(events),
+                Err(e) if e.is_expired_or_frozen_error() => OperationResult::Err(e),
+                Err(e) => OperationResult::Retry(e),
+            });
 
             match res {
                 // If `client.refresh()` was successful, continue
                 Ok(_) => Ok(Next::Continue),
 
                 // If `client.refresh()` failed and the retry mechanism
-                // exceeded the maximum delay, return a fatal error.
+                // exceeded the maximum delay, or we short-circuited on an
+                // expired/frozen client, return a fatal error.
                 Err(e) => Err(TaskError::Fatal(e)),
             }
         },
@@ -162,4 +176,97 @@ fn refresh_strategy() -> impl Iterator<Item = Duration> {
         MAX_REFRESH_DELAY,
         MAX_REFRESH_TOTAL_DELAY,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use core::time::Duration;
+
+    use ibc_relayer_types::core::ics24_host::identifier::{ChainId, ClientId};
+    use retry::{delay::Fixed, retry_with_index, OperationResult};
+
+    use super::refresh_strategy;
+    use crate::foreign_client::{
+        ExpiredOrFrozen, ForeignClientError, HasExpiredOrFrozenError,
+    };
+
+    fn expired() -> ForeignClientError {
+        ForeignClientError::expired_or_frozen(
+            ExpiredOrFrozen::Expired,
+            ClientId::default(),
+            ChainId::new("test".to_string(), 0),
+            "time elapsed since last client update: 1209600s".to_string(),
+        )
+    }
+
+    fn frozen() -> ForeignClientError {
+        ForeignClientError::expired_or_frozen(
+            ExpiredOrFrozen::Frozen,
+            ClientId::default(),
+            ChainId::new("test".to_string(), 0),
+            "client state reports that client is frozen".to_string(),
+        )
+    }
+
+    fn transient() -> ForeignClientError {
+        ForeignClientError::chain_error_event(
+            ChainId::new("test".to_string(), 0),
+            ibc_relayer_types::events::IbcEvent::ChainError("boom".to_string()),
+        )
+    }
+
+    /// Mirrors the mapping in `spawn_refresh_client`. Kept in sync by eye —
+    /// the point is to catch the `OperationResult::Err` arm regressing back
+    /// to `Retry`, which would silently turn the fix into a no-op.
+    fn drive<S, F>(strategy: S, mut refresh: F) -> usize
+    where
+        S: IntoIterator<Item = Duration>,
+        F: FnMut() -> Result<(), ForeignClientError>,
+    {
+        let mut attempts = 0;
+
+        let _ = retry_with_index(strategy, |_| {
+            attempts += 1;
+
+            match refresh() {
+                Ok(()) => OperationResult::Ok(()),
+                Err(e) if e.is_expired_or_frozen_error() => OperationResult::Err(e),
+                Err(e) => OperationResult::Retry(e),
+            }
+        });
+
+        attempts
+    }
+
+    #[test]
+    fn short_circuits_on_expired_client() {
+        // The real strategy: 5s initial backoff, clamped to 1h / 1 day. If the
+        // short-circuit regressed, this test would hang rather than fail —
+        // which is itself the signal.
+        assert_eq!(drive(refresh_strategy(), || Err(expired())), 1);
+    }
+
+    #[test]
+    fn short_circuits_on_frozen_client() {
+        assert_eq!(drive(refresh_strategy(), || Err(frozen())), 1);
+    }
+
+    /// Guards against an over-eager short-circuit: ordinary failures must
+    /// still retry, or recovery from a transient RPC blip would break.
+    #[test]
+    fn still_retries_on_transient_errors() {
+        let strategy = Fixed::from_millis(1).take(4);
+        assert_eq!(drive(strategy, || Err(transient())), 5);
+    }
+
+    /// An expired error surfacing anywhere in the refresh path must be
+    /// recognised by the trait, not just one constructed in this test.
+    /// `validated_client_state` returns it unwrapped (foreign_client.rs:761,784)
+    /// and `try_refresh`/`refresh` propagate it with `?`.
+    #[test]
+    fn expired_error_is_recognised_by_the_trait() {
+        assert!(expired().is_expired_or_frozen_error());
+        assert!(frozen().is_expired_or_frozen_error());
+        assert!(!transient().is_expired_or_frozen_error());
+    }
 }

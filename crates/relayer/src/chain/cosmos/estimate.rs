@@ -222,6 +222,10 @@ fn get_error_text(e: &Error) -> String {
 
     match e.detail() {
         GrpcStatus(detail) => detail.status.code().to_string(),
-        detail => detail.to_string(),
+        // NOT `detail.to_string()`: this string becomes a telemetry label, and
+        // `Display` embeds variable data (gas used, sequence numbers, hashes),
+        // which makes the metric's label cardinality unbounded. See
+        // `ErrorDetail::variant_name`.
+        detail => detail.variant_name().to_string(),
     }
 }
