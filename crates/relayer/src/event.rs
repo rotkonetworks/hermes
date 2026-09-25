@@ -406,6 +406,7 @@ pub fn extract_packet_and_write_ack_from_tx(
 ) -> Result<(Packet, Vec<u8>), ChannelError> {
     let mut packet = Packet::default();
     let mut write_ack: Vec<u8> = Vec::new();
+    let mut write_ack_is_hex = false;
 
     for tag in &event.attributes {
         let key = tag.key.as_str();
@@ -440,8 +441,25 @@ pub fn extract_packet_and_write_ack_from_tx(
                 packet.data = hex::decode(value.to_lowercase())
                     .map_err(|_| ChannelError::invalid_packet_data(value.to_string()))?;
             }
+            // ibc-go < v10 emits both `packet_ack` and `packet_ack_hex`;
+            // ibc-go >= v10 emits ONLY the hex form. Accept either, and let
+            // the hex form win when both are present: penumbra's ibc-types
+            // emits `packet_ack_hex` first and `packet_ack` only when the ack
+            // happens to be UTF-8, so last-match-wins would regress that leg.
+            //
+            // Getting this wrong is silent: an unmatched key leaves the ack
+            // empty, hermes submits MsgAcknowledgement with no ack bytes, and
+            // the counterparty hashes sha256("") -> "packet ack proof
+            // verification failed" with a valid-looking merkle proof.
             channel_events::PKT_ACK_ATTRIBUTE_KEY => {
-                write_ack = Vec::from(value.as_bytes());
+                if !write_ack_is_hex {
+                    write_ack = Vec::from(value.as_bytes());
+                }
+            }
+            channel_events::PKT_ACK_HEX_ATTRIBUTE_KEY => {
+                write_ack = hex::decode(value.to_lowercase())
+                    .map_err(|_| ChannelError::invalid_packet_ack(value.to_string()))?;
+                write_ack_is_hex = true;
             }
             _ => {}
         }
@@ -479,6 +497,65 @@ mod tests {
         events::IbcEvent,
     };
     use tendermint::abci::Event as AbciEvent;
+
+    use super::extract_packet_and_write_ack_from_tx;
+
+    /// ibc-go >= v10 emits ONLY `packet_ack_hex`. Reading just the legacy
+    /// `packet_ack` key left the ack EMPTY with no error, so hermes submitted
+    /// MsgAcknowledgement with no ack bytes and the counterparty rejected it
+    /// as "packet ack proof verification failed" — a valid proof of the wrong
+    /// value. Observed against cosmoshub-4 (gaia v28.3.0 / ibc-go v10.7.0).
+    fn ack_event(attrs: &[(&str, &str)]) -> AbciEvent {
+        AbciEvent {
+            kind: "write_acknowledgement".to_owned(),
+            attributes: attrs
+                .iter()
+                .map(|(k, v)| tendermint::abci::EventAttribute {
+                    key: k.to_string(),
+                    value: v.to_string(),
+                    index: false,
+                })
+                .collect(),
+        }
+    }
+
+    // `{"result":"AQ=="}` — the real ack emitted by cosmoshub for an ics20 recv.
+    const ACK_PLAIN: &str = r#"{"result":"AQ=="}"#;
+    const ACK_HEX: &str = "7b22726573756c74223a2241513d3d227d";
+
+    #[test]
+    fn write_ack_read_from_hex_only_attribute() {
+        // ibc-go >= v10 shape: hex attribute only.
+        let (_, ack) = extract_packet_and_write_ack_from_tx(&ack_event(&[(
+            "packet_ack_hex",
+            ACK_HEX,
+        )]))
+        .unwrap();
+        assert_eq!(ack, ACK_PLAIN.as_bytes(), "hex-only ack must be decoded");
+        assert!(!ack.is_empty(), "an empty ack is the silent-failure bug");
+    }
+
+    #[test]
+    fn write_ack_prefers_hex_when_both_present() {
+        // ibc-go < v10 emits both. penumbra's ibc-types emits hex FIRST and the
+        // plain key only when the ack is valid UTF-8, so last-match-wins would
+        // regress that direction. Assert hex wins in either ordering.
+        for attrs in [
+            vec![("packet_ack", ACK_PLAIN), ("packet_ack_hex", ACK_HEX)],
+            vec![("packet_ack_hex", ACK_HEX), ("packet_ack", ACK_PLAIN)],
+        ] {
+            let (_, ack) = extract_packet_and_write_ack_from_tx(&ack_event(&attrs)).unwrap();
+            assert_eq!(ack, ACK_PLAIN.as_bytes());
+        }
+    }
+
+    #[test]
+    fn write_ack_falls_back_to_legacy_plain_attribute() {
+        let (_, ack) =
+            extract_packet_and_write_ack_from_tx(&ack_event(&[("packet_ack", ACK_PLAIN)])).unwrap();
+        assert_eq!(ack, ACK_PLAIN.as_bytes());
+    }
+
 
     use super::ibc_event_try_from_abci_event;
 

@@ -195,6 +195,14 @@ define_error! {
                     e.given_sequence, e.next_sequence)
             },
 
+        InvalidPacketAck
+            {
+                ack: String,
+            }
+            | e | {
+                format_args!("Invalid packet ack, not a valid hex-encoded string: {}", e.ack)
+            },
+
         InvalidPacketData
             {
                 data: String,

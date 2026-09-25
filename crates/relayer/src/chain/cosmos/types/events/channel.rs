@@ -8,7 +8,7 @@ use ibc_relayer_types::{
             events::{
                 AcknowledgePacket, Attributes, CloseConfirm, CloseInit, EventType, OpenAck,
                 OpenConfirm, OpenInit, OpenTry, ReceivePacket, SendPacket, TimeoutOnClosePacket,
-                TimeoutPacket, WriteAcknowledgement, PKT_ACK_ATTRIBUTE_KEY, PKT_DATA_ATTRIBUTE_KEY,
+                TimeoutPacket, WriteAcknowledgement, PKT_ACK_ATTRIBUTE_KEY, PKT_ACK_HEX_ATTRIBUTE_KEY, PKT_DATA_ATTRIBUTE_KEY,
                 PKT_DST_CHANNEL_ATTRIBUTE_KEY, PKT_DST_PORT_ATTRIBUTE_KEY, PKT_SEQ_ATTRIBUTE_KEY,
                 PKT_SRC_CHANNEL_ATTRIBUTE_KEY, PKT_SRC_PORT_ATTRIBUTE_KEY,
                 PKT_TIMEOUT_HEIGHT_ATTRIBUTE_KEY, PKT_TIMEOUT_TIMESTAMP_ATTRIBUTE_KEY,
@@ -91,8 +91,23 @@ impl TryFrom<RawObject<'_>> for WriteAcknowledgement {
     type Error = EventError;
 
     fn try_from(obj: RawObject<'_>) -> Result<Self, Self::Error> {
-        let ack = extract_attribute(&obj, &format!("{}.{}", obj.action, PKT_ACK_ATTRIBUTE_KEY))?
-            .into_bytes();
+        // ibc-go >= v10 emits ONLY `packet_ack_hex`; older versions emit both.
+        // Prefer the hex form, fall back to the legacy plain attribute. If we
+        // matched neither we would hand back an empty ack, which the
+        // counterparty rejects as "packet ack proof verification failed".
+        let hex_ack = extract_attribute(
+            &obj,
+            &format!("{}.{}", obj.action, PKT_ACK_HEX_ATTRIBUTE_KEY),
+        )
+        .ok()
+        .and_then(|raw| hex::decode(raw.to_lowercase()).ok());
+
+        let ack = match hex_ack {
+            Some(ack) => ack,
+            // ibc-go < v10 only: fall back to the legacy plain attribute.
+            None => extract_attribute(&obj, &format!("{}.{}", obj.action, PKT_ACK_ATTRIBUTE_KEY))?
+                .into_bytes(),
+        };
 
         let packet = Packet::try_from(obj)?;
 
