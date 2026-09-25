@@ -1,0 +1,79 @@
+# cosmoshub-4 + osmosis-1 <-> penumbra-1 hermes chain blocks (PASTE-READY)
+# ---------------------------------------------------------------------------
+# Why: the original Penumbra channels to these chains are dead. Checked
+# 2026-09-25: cosmoshub-4 channel-940 client 07-tendermint-1317 = Expired;
+# the penumbra-side clients 07-tendermint-0 (hub), -4 (osmosis), -3 (celestia)
+# expired months ago and penumbra 2.0.x has no client recovery. Reopening =
+# a NEW connection + channel with fresh clients on both sides (see README.md).
+#
+# Both are vanilla cosmos-sdk chains: secp256k1, coin type 118, default
+# address derivation - unlike injective (ethermint), nothing special here.
+# Append to ~/.hermes/config.toml on the relayer host, next to injective-1.
+# ---------------------------------------------------------------------------
+
+[[chains]]
+id = 'cosmoshub-4'
+type = 'CosmosSdk'
+ccv_consumer_chain = false
+# probe before `hermes start` (a bad grpc_addr stops hermes, and clients age):
+#   grpcurl cosmos-grpc.publicnode.com:443 list
+rpc_addr = 'https://cosmos-rpc.publicnode.com:443'
+grpc_addr = 'https://cosmos-grpc.publicnode.com:443'
+event_source = { mode = 'push', url = 'wss://cosmos-rpc.publicnode.com:443/websocket', batch_delay = '500ms' }
+rpc_timeout = '15s'
+trusted_node = false
+account_prefix = 'cosmos'
+key_name = 'cosmoshub-relayer'
+store_prefix = 'ibc'
+# the hub runs x/feemarket; 0.005uatom is the floor it has enforced - use
+# dynamic pricing so a fee spike doesn't stall relaying
+gas_price = { price = 0.005, denom = 'uatom' }
+dynamic_gas_price = { enabled = true, multiplier = 1.1, max = 0.1 }
+gas_multiplier = 1.3
+default_gas = 400000
+max_gas = 4000000
+max_msg_num = 15
+max_tx_size = 180000
+# unbonding 21 days -> hermes derives trusting period as 2/3 (14 days)
+clock_drift = '15s'
+max_block_time = '30s'
+[chains.packet_filter]
+policy = 'allow'
+list = [
+  ['transfer', 'channel-HUB'],   # FILL IN after `create channel` (hub side)
+]
+
+[[chains]]
+id = 'osmosis-1'
+type = 'CosmosSdk'
+ccv_consumer_chain = false
+#   grpcurl osmosis-grpc.publicnode.com:443 list
+rpc_addr = 'https://osmosis-rpc.publicnode.com:443'
+grpc_addr = 'https://osmosis-grpc.publicnode.com:443'
+event_source = { mode = 'push', url = 'wss://osmosis-rpc.publicnode.com:443/websocket', batch_delay = '500ms' }
+rpc_timeout = '15s'
+trusted_node = false
+account_prefix = 'osmo'
+key_name = 'osmosis-relayer'
+store_prefix = 'ibc'
+# osmosis prices gas with its txfees module (EIP-1559 style)
+gas_price = { price = 0.0025, denom = 'uosmo' }
+dynamic_gas_price = { enabled = true, multiplier = 1.1, max = 0.6 }
+gas_multiplier = 1.3
+default_gas = 400000
+max_gas = 4000000
+max_msg_num = 15
+max_tx_size = 180000
+# unbonding 14 days -> derived trusting period ~9.3 days
+clock_drift = '15s'
+max_block_time = '30s'
+[chains.packet_filter]
+policy = 'allow'
+list = [
+  ['transfer', 'channel-OSMO'],  # FILL IN after `create channel` (osmosis side)
+]
+
+# penumbra-1 side: add the two NEW penumbra channel ids to the EXISTING
+# penumbra-1 [chains.packet_filter] allow-list (next to channel-18), e.g.
+#   ['transfer', 'channel-PEN-HUB'],
+#   ['transfer', 'channel-PEN-OSMO'],
