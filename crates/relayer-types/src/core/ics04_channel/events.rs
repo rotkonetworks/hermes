@@ -34,6 +34,8 @@ pub const PKT_DST_CHANNEL_ATTRIBUTE_KEY: &str = "packet_dst_channel";
 pub const PKT_TIMEOUT_HEIGHT_ATTRIBUTE_KEY: &str = "packet_timeout_height";
 pub const PKT_TIMEOUT_TIMESTAMP_ATTRIBUTE_KEY: &str = "packet_timeout_timestamp";
 pub const PKT_ACK_ATTRIBUTE_KEY: &str = "packet_ack";
+/// ibc-go >= v10 emits ONLY the hex form; older versions emit both.
+pub const PKT_ACK_HEX_ATTRIBUTE_KEY: &str = "packet_ack_hex";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub struct Attributes {
