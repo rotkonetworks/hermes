@@ -1,25 +1,26 @@
-# ============================================================
-# Hermes IBC Relayer — PUBLIC EXAMPLE CONFIG
-# ============================================================
-# This relays IBC packets for the Penumbra <-> Noble corridor
-# (and optionally Osmosis) using PUBLIC RPC/gRPC endpoints, so
-# anyone can run a relayer without operating full nodes first.
+# Hermes config for relaying Penumbra (penumbra-1) IBC channels.
 #
-# Quick start:
-#   1. Install the binary (see the self-hosting guide).
-#   2. Copy this file:   cp config.example.toml ~/.hermes/config.toml
-#   3. Add your signing keys (see the [chains] notes below):
-#        hermes keys add --chain noble-1  --key-file  noble.json
-#        (Penumbra is signed by the spend key in kms_config — see below.)
-#   4. Health check:     hermes health-check
-#   5. Run:              hermes start
+# This is Rotko Networks' production relayer config (2026-10) with keys
+# removed and a few host-specific values made generic. See
+# docs/self-hosting-relayer.md for setup, keys and funding.
 #
-# NOTE ON PUBLIC ENDPOINTS: public RPC nodes are rate-limited and
-# frequently prune `/block_results`, which the "pull" event source
-# needs. They are fine for trying the relayer out; for reliable
-# 24/7 relaying, run your own Penumbra + Noble nodes and point the
-# addresses at localhost. See the guide's "Production" section.
-# ============================================================
+# Before running, replace:
+#   - kms_config.spend_key        your own Penumbra spend key
+#   - view_service_storage_dir    an absolute path ("~" is NOT expanded)
+#   - memo_prefix                 your relayer name
+#   - key_name per chain          whatever you named the keys in `hermes keys add`
+#
+# Drop any [[chains]] block you don't want to relay, and remove its penumbra
+# channel from the penumbra-1 packet_filter.
+#
+# Channel map (penumbra-1 side <-> counterparty side):
+#   channel-2   <-> noble-1         channel-89
+#   channel-18  <-> injective-1     channel-494
+#   channel-20  <-> osmosis-1       channel-111093
+#   channel-21  <-> kava_2222-10    channel-162
+#   channel-22  <-> cosmoshub-4     channel-1934
+#   channel-23  <-> celestia        channel-701
+#   channel-24  <-> axelar-dojo-1   channel-198
 
 [global]
 log_level = "info"
@@ -29,8 +30,10 @@ log_level = "info"
 [mode.clients]
 enabled = true
 refresh = true
-misbehaviour = false
+misbehaviour = true
 
+# We run these enabled; a relayer that only serves existing channels does not
+# need them.
 [mode.connections]
 enabled = false
 
@@ -39,10 +42,12 @@ enabled = false
 
 [mode.packets]
 enabled = true
-clear_interval = 100
+clear_interval = 300
 clear_on_start = true
 tx_confirmation = true
 
+# We bind 0.0.0.0 behind a firewall for scraping. Keep 127.0.0.1 unless you
+# need remote access.
 [rest]
 enabled = true
 host = "127.0.0.1"
@@ -54,53 +59,54 @@ host = "127.0.0.1"
 port = 3001
 
 # ============================================================
-# PENUMBRA — penumbra-1
+# PENUMBRA - penumbra-1
 # ============================================================
-# Penumbra is shielded: the relayer runs an EMBEDDED view server
-# that syncs a local view of the chain into `view_service_storage_dir`.
-# First start performs a full view sync (can take a while); progress
-# is persisted, so restarts resume where they left off.
+# Hermes signs Penumbra txs with the spend key below (not the hermes
+# keyring) and runs an embedded view server that stores its wallet state in
+# view_service_storage_dir/relayer-view.sqlite. The account pays fees in UM
+# (~0.0013 UM per tx).
 #
-# `kms_config.spend_key` MUST be your own Penumbra spend key. It is
-# used to sign the relayer's Penumbra transactions and to pay fees,
-# so the associated account needs a small UM balance. NEVER commit a
-# real spend key — the value below is a non-functional placeholder.
+# We point at a local pd + cometbft (http://127.0.0.1:26657 and
+# http://127.0.0.1:8080). penumbra.rotko.net serves both CometBFT RPC and
+# pd gRPC on 443 if you don't run a node yet.
 [[chains]]
 id = "penumbra-1"
 type = "Penumbra"
-rpc_addr = "https://penumbra-rpc.polkachu.com"
-grpc_addr = "https://penumbra-grpc.polkachu.com:443"
+rpc_addr = "https://penumbra.rotko.net"
+grpc_addr = "https://penumbra.rotko.net"
 event_source = { mode = "pull", interval = "1s" }
 rpc_timeout = "15s"
 clock_drift = "5s"
 max_block_time = "10s"
 client_refresh_rate = "1/4"
-kms_config = { spend_key = "penumbraspendkey1REPLACE_WITH_YOUR_OWN_SPEND_KEY000000000000000000000000000" }
-view_service_storage_dir = "~/.hermes/penumbra-view"
+# `config validate` fails until this is a real key.
+kms_config = { spend_key = "penumbraspendkey1REPLACE_ME" }
+view_service_storage_dir = "/var/lib/hermes/view"
 
 [chains.trust_threshold]
 numerator = "1"
 denominator = "3"
 
-# Only relay the Noble transfer channel. Add more ["transfer","channel-N"]
-# entries as you enable more corridors.
 [chains.packet_filter]
 policy = "allow"
 list = [
-  ["transfer", "channel-2"],   # penumbra-1 <-> noble-1
+  ["transfer", "channel-2"],    # noble
+  ["transfer", "channel-18"],   # injective
+  ["transfer", "channel-20"],   # osmosis
+  ["transfer", "channel-21"],   # kava
+  ["transfer", "channel-22"],   # cosmoshub
+  ["transfer", "channel-23"],   # celestia
+  ["transfer", "channel-24"],   # axelar
 ]
 
 # ============================================================
-# NOBLE — noble-1  (USDC issuer chain)
+# NOBLE - noble-1  (penumbra channel-2)
 # ============================================================
-# Add a funded Noble key before running:
-#   hermes keys add --chain noble-1 --key-file noble.json
-# The account pays gas in uusdc, so keep a little USDC on it.
 [[chains]]
 id = "noble-1"
 type = "CosmosSdk"
 rpc_addr = "https://noble-rpc.polkachu.com"
-grpc_addr = "https://noble-grpc.polkachu.com:443"
+grpc_addr = "http://noble-grpc.polkachu.com:21590"
 event_source = { mode = "pull", interval = "1s" }
 rpc_timeout = "10s"
 trusted_node = false
@@ -110,75 +116,282 @@ store_prefix = "ibc"
 default_gas = 400000
 max_gas = 1500000
 gas_multiplier = 1.2
-max_msg_num = 30
+# value we run; hermes default is 30
+max_msg_num = 3
 max_tx_size = 180000
 clock_drift = "5s"
 max_block_time = "30s"
 client_refresh_rate = "1/2"
 query_packets_chunk_size = 50
-memo_prefix = "relayed by hermes"
+memo_prefix = "your-relayer-name"
 sequential_batch_tx = false
 
 [chains.trust_threshold]
 numerator = "1"
 denominator = "3"
 
+# Noble has no native gas token; fees are paid in USDC.
 [chains.gas_price]
 price = 0.1
 denom = "uusdc"
 
 [chains.packet_filter]
 policy = "allow"
-list = [["transfer", "channel-89"]]   # noble-1 <-> penumbra-1
+list = [["transfer", "channel-89"]]
 
 [chains.address_type]
 derivation = "cosmos"
 
 # ============================================================
-# OSMOSIS — osmosis-1  (OPTIONAL — uncomment to also relay Osmosis)
+# INJECTIVE - injective-1  (penumbra channel-18)
 # ============================================================
-# Add a funded Osmosis key:  hermes keys add --chain osmosis-1 --key-file osmo.json
-# Update the channel ids to the live penumbra<->osmosis channels before enabling.
+# compat_mode = '0.37' is mandatory. Injective runs CometBFT 1.0.1 but its
+# RPC still emits legacy-shaped JSON, and this fork's tendermint-rpc only
+# knows 0.34 / 0.37 ('0.38' is a config error).
 #
-# [[chains]]
-# id = "osmosis-1"
-# type = "CosmosSdk"
-# rpc_addr = "https://osmosis-rpc.polkachu.com"
-# grpc_addr = "https://osmosis-grpc.polkachu.com:443"
-# event_source = { mode = "pull", interval = "1s" }
-# rpc_timeout = "10s"
-# trusted_node = false
-# account_prefix = "osmo"
-# key_name = "osmosis-relayer"
-# store_prefix = "ibc"
-# default_gas = 800000
-# max_gas = 20000000
-# gas_multiplier = 1.4
-# max_msg_num = 30
-# max_tx_size = 180000
-# clock_drift = "5s"
-# max_block_time = "30s"
-# client_refresh_rate = "1/2"
-# query_packets_chunk_size = 50
-# memo_prefix = "relayed by hermes"
-# sequential_batch_tx = false
-#
-# [chains.trust_threshold]
-# numerator = "1"
-# denominator = "3"
-#
-# [chains.gas_price]
-# price = 0.0025
-# denom = "uosmo"
-#
-# [chains.dynamic_gas_price]
-# enabled = true
-# multiplier = 1.1
-# max = 0.6
-#
-# [chains.packet_filter]
-# policy = "allow"
-# list = [["transfer", "channel-17"]]   # penumbra-1 <-> osmosis-1
-#
-# [chains.address_type]
-# derivation = "cosmos"
+# The key is ethsecp256k1 (coin type 60), not a regular cosmos key; see
+# address_type below.
+[[chains]]
+id = "injective-1"
+type = "CosmosSdk"
+rpc_addr = "https://sentry.tm.injective.network:443"
+# The sentry's envoy caps per-request time, so a full
+# `hermes query clients --host-chain injective-1` times out there. Targeted
+# queries are fine. Fallback that handles enumeration (plaintext):
+#   grpc_addr = "http://injective-grpc.polkachu.com:14390"
+grpc_addr = "https://sentry.chain.grpc.injective.network:443"
+event_source = { mode = 'push', url = 'wss://sentry.tm.injective.network/websocket', batch_delay = '500ms' }
+compat_mode = '0.37'
+rpc_timeout = "20s"
+trusted_node = false
+account_prefix = "inj"
+key_name = "injective-relayer"
+store_prefix = "ibc"
+default_gas = 400000
+max_gas = 5000000
+gas_multiplier = 1.2
+max_msg_num = 30
+max_tx_size = 1800000
+max_grpc_decoding_size = 33554432
+clock_drift = "15s"
+max_block_time = "10s"
+client_refresh_rate = "1/4"
+# 14d < 21d unbonding
+trusting_period = "14days"
+sequential_batch_tx = true
+memo_prefix = "your-relayer-name"
+
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+
+# Injective prices gas with an EIP-1559 txfees module that
+# dynamic_gas_price cannot read, so this is static with ~3x headroom over
+# the 0.16 gwei floor (~0.0002 INJ per 400k-gas tx). Current base fee:
+#   curl https://sentry.lcd.injective.network/injective/txfees/v1beta1/cur_eip_base_fee
+[chains.gas_price]
+price = 480000000.0
+denom = "inj"
+
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-494"]]
+
+[chains.address_type]
+derivation = "ethermint"
+
+[chains.address_type.proto_type]
+pk_type = "/injective.crypto.v1beta1.ethsecp256k1.PubKey"
+
+# ============================================================
+# OSMOSIS - osmosis-1  (penumbra channel-20)
+# ============================================================
+# Keplr RPC is reliable but has no gRPC; pair it with a gRPC that is not
+# behind Cloudflare (osmosis-grpc.publicnode.com returned HTTP 524 pages
+# mid-handshake, which hermes reports as "invalid compression flag: 101").
+[[chains]]
+id = "osmosis-1"
+type = "CosmosSdk"
+rpc_addr = "https://rpc-osmosis.keplr.app"
+grpc_addr = "http://osmosis-grpc.polkachu.com:12590"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "15s"
+trusted_node = false
+account_prefix = "osmo"
+key_name = "osmosis-relayer"
+store_prefix = "ibc"
+default_gas = 800000
+max_gas = 4000000
+gas_multiplier = 1.5
+max_msg_num = 20
+max_tx_size = 180000
+clock_drift = "10s"
+max_block_time = "30s"
+client_refresh_rate = "1/3"
+query_packets_chunk_size = 50
+memo_prefix = "your-relayer-name"
+sequential_batch_tx = false
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+[chains.gas_price]
+price = 0.0625
+denom = "uosmo"
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-111093"]]
+[chains.address_type]
+derivation = "cosmos"
+
+# ============================================================
+# KAVA - kava_2222-10  (penumbra channel-21)
+# ============================================================
+[[chains]]
+id = "kava_2222-10"
+type = "CosmosSdk"
+rpc_addr = "https://kava-rpc.polkachu.com"
+grpc_addr = "http://kava-grpc.polkachu.com:13990"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "15s"
+trusted_node = false
+account_prefix = "kava"
+key_name = "kava-relayer"
+store_prefix = "ibc"
+default_gas = 800000
+max_gas = 4000000
+gas_multiplier = 1.5
+max_msg_num = 20
+max_tx_size = 180000
+clock_drift = "10s"
+max_block_time = "30s"
+client_refresh_rate = "1/3"
+query_packets_chunk_size = 50
+memo_prefix = "your-relayer-name"
+sequential_batch_tx = false
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+[chains.gas_price]
+price = 0.0025
+denom = "ukava"
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-162"]]
+[chains.address_type]
+derivation = "cosmos"
+
+# ============================================================
+# COSMOS HUB - cosmoshub-4  (penumbra channel-22)
+# ============================================================
+# Needs a build that includes 7b143b30d (reads packet_ack_hex); older
+# binaries cannot relay acknowledgements from the hub.
+[[chains]]
+id = "cosmoshub-4"
+type = "CosmosSdk"
+rpc_addr = "https://rpc-cosmoshub.keplr.app"
+grpc_addr = "http://cosmos-grpc.polkachu.com:14990"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "15s"
+trusted_node = false
+account_prefix = "cosmos"
+key_name = "cosmos-relayer"
+store_prefix = "ibc"
+default_gas = 800000
+max_gas = 4000000
+gas_multiplier = 1.5
+max_msg_num = 20
+max_tx_size = 180000
+clock_drift = "10s"
+max_block_time = "30s"
+client_refresh_rate = "1/3"
+query_packets_chunk_size = 50
+memo_prefix = "your-relayer-name"
+sequential_batch_tx = false
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+[chains.gas_price]
+price = 0.03
+denom = "uatom"
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-1934"]]
+[chains.address_type]
+derivation = "cosmos"
+
+# ============================================================
+# CELESTIA - celestia  (penumbra channel-23)
+# ============================================================
+# The chain id is literally "celestia". Working celestia gRPC endpoints are
+# scarce; if this one fails, https://celestia-grpc.publicnode.com:443 also
+# worked (Cloudflare-fronted, retry on 524).
+[[chains]]
+id = "celestia"
+type = "CosmosSdk"
+rpc_addr = "https://celestia.rpc.kjnodes.com"
+grpc_addr = "https://grpc.celestia.nodestake.org:443"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "15s"
+trusted_node = false
+account_prefix = "celestia"
+key_name = "celestia-relayer"
+store_prefix = "ibc"
+default_gas = 800000
+max_gas = 4000000
+gas_multiplier = 1.5
+max_msg_num = 20
+max_tx_size = 180000
+clock_drift = "10s"
+max_block_time = "30s"
+client_refresh_rate = "1/4"
+query_packets_chunk_size = 50
+memo_prefix = "your-relayer-name"
+sequential_batch_tx = false
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+[chains.gas_price]
+price = 0.02
+denom = "utia"
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-701"]]
+[chains.address_type]
+derivation = "cosmos"
+
+# ============================================================
+# AXELAR - axelar-dojo-1  (penumbra channel-24)
+# ============================================================
+[[chains]]
+id = "axelar-dojo-1"
+type = "CosmosSdk"
+rpc_addr = "https://rpc-axelar.keplr.app"
+grpc_addr = "http://axelar-grpc.polkachu.com:15190"
+event_source = { mode = "pull", interval = "1s" }
+rpc_timeout = "15s"
+trusted_node = false
+account_prefix = "axelar"
+key_name = "axelar-relayer"
+store_prefix = "ibc"
+default_gas = 800000
+max_gas = 4000000
+gas_multiplier = 1.5
+max_msg_num = 20
+max_tx_size = 180000
+clock_drift = "10s"
+max_block_time = "30s"
+client_refresh_rate = "1/3"
+query_packets_chunk_size = 50
+memo_prefix = "your-relayer-name"
+sequential_batch_tx = false
+[chains.trust_threshold]
+numerator = "1"
+denominator = "3"
+[chains.gas_price]
+price = 0.007
+denom = "uaxl"
+[chains.packet_filter]
+policy = "allow"
+list = [["transfer", "channel-198"]]
+[chains.address_type]
+derivation = "cosmos"

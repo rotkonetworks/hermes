@@ -12,6 +12,10 @@
 
 Rust implementation of an Inter-Blockchain Communication (IBC) relayer.
 
+This fork adds Penumbra support. To run a Penumbra relayer, see
+[docs/self-hosting-relayer.md](docs/self-hosting-relayer.md) and
+[config.example.toml](config.example.toml).
+
 This project comprises primarily of 6 crates:
 
 - [`ibc-relayer`][relayer-crate-link] provides an implementation of an IBC relayer, as a _library_.
